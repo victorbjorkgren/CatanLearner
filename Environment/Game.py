@@ -6,29 +6,34 @@ import numpy as np
 import torch
 from torch_geometric.utils.convert import to_networkx
 
-from Board import Board
-from Player import Player
-from constants import *
+from .Board import Board
+from .Player import Player
+from .constants import *
 
 
 class Game:
-    def __init__(self, player_agents, render=False, max_turns=100, start_episode=0):
+    def __init__(self, player_agents: [], max_turns=100, start_episode=0):
         assert len(player_agents) == 2
         self.players = None
         self.board = None
         self.turn = None
+
         self.player_agents = player_agents
         self.max_turns = max_turns
         self.episode = start_episode
+
         self.n_players = len(player_agents)
+
         self.reset()
-        self.game_loop(render)
 
     def reset(self):
         self.turn = 0
         self.episode += 1
         self.board = Board(self.n_players)
         self.players = [Player(agent) for agent in self.player_agents]
+
+    def start(self, render=False):
+        self.game_loop(render)
 
     def game_loop(self, render=False):
         current_player = 0
@@ -46,10 +51,15 @@ class Game:
                 self.render()
 
     def take_turn(self, current_player):
-        player_done = False
-        while not player_done:
-            act_type, index = self.players[current_player].sample_action()
-            player_done = self.take_action(act_type, current_player, index)
+        turn_completed = False
+        while not turn_completed:
+            action_type, action_index = self.players[current_player].sample_action(
+                self.board,
+                self.players,
+                i_am_player=current_player
+            )
+
+            turn_completed = self.take_action(action_type, current_player, action_index)
 
     def game_on(self):
         if self.turn >= self.max_turns:
@@ -89,7 +99,7 @@ class Game:
             self.build_road(index, player)
             return False
         if act_type == 2:
-            self.build_village(index, player)
+            self.build_village(index, 1, player)
             return False
 
     def build_road(self, index, player):
@@ -106,8 +116,9 @@ class Game:
         return False
 
     def build_village(self, index, size, player):
-        if self.board.can_build_village(index, player):
-            if size == 1:
+        can_build, size = self.board.can_build_village(index, player)
+        if can_build:
+            if size == 0:
                 # [Bricks, Grains, Ores, Lumbers, Wools]
                 if (
                         (self.players[player].hand[0] > 0)
@@ -122,7 +133,7 @@ class Game:
                     self.board.state.x[index, player] = size
                     self.players[player].points += 1
                     return True
-            if size == 2:
+            if size == 1:
                 # [Bricks, Grains, Ores, Lumbers, Wools]
                 if (
                         (self.players[player].hand[1] > 2)
@@ -173,15 +184,15 @@ class Game:
         ###
         for face_idx, node_indices in enumerate(self.board.state.face_index):
             # Extract positions for nodes in this face
-            node_positions = np.array([self.board.state.pos[node.item()] for node in node_indices])
+            node_positions = np.array([self.board.state.pos[node] for node in node_indices])
 
             # Calculate centroid of the face
             centroid = node_positions.mean(axis=0)
 
             # Prepare the text based on face attribute (e.g., just converting attribute to string here)
-            face_type = TILE_TYPES[self.board.state.face_attr[face_idx].argmax().item()]
+            face_type = TILE_NAMES[self.board.state.face_attr[face_idx].argmax().item()]
             face_dice = str(int(self.board.state.face_attr[face_idx].max().item()))
-            text = face_dice + '\n' + face_type
+            text = face_dice + '\n' + face_type + '\n' + str(face_idx)
 
             # Annotate the graph
             plt.text(centroid[0], centroid[1], text, ha='center', va='center')
@@ -189,8 +200,8 @@ class Game:
         ###
         # Player state texts
         ###
-        text_bottom_left = "Player 1:\n" + str(self.players[0])
-        text_bottom_right = "Player 1:\n" + str(self.players[1])
+        text_top_right = "Player 1:\n" + str(self.players[0])
+        text_bottom_right = "Player 2:\n" + str(self.players[1])
         text_top_left = f"Turn {self.turn + 1}"
 
         # Margins from the edges of the figure
@@ -199,29 +210,32 @@ class Game:
 
         # Calculate positions based on figure dimensions and margins
         bottom_left_pos = (margin_x * FIG_X, margin_y * FIG_Y)
+        top_right_pos = ((1 - margin_x) * FIG_X, (1 - margin_y) * FIG_Y)
         bottom_right_pos = ((1 - margin_x) * FIG_X, margin_y * FIG_Y)
         top_left_pos = (margin_x * FIG_X, (1 - margin_y) * FIG_Y)
 
         # Adding custom text at specified positions
-        plt.text(bottom_left_pos[0], bottom_left_pos[1], text_bottom_left, ha='left', va='bottom',
-                 transform=plt.gcf().transFigure)
-        plt.text(bottom_right_pos[0], bottom_right_pos[1], text_bottom_right, ha='right', va='bottom',
-                 transform=plt.gcf().transFigure)
-        plt.text(top_left_pos[0], top_left_pos[1], text_top_left, ha='left', va='top', transform=plt.gcf().transFigure)
+        # plt.text(bottom_left_pos[0], bottom_left_pos[1], text_bottom_left, ha='left', va='bottom')
+        plt.text(top_right_pos[0], top_right_pos[1], text_top_right, ha='right', va='top')
+        plt.text(bottom_right_pos[0], bottom_right_pos[1], text_bottom_right, ha='right', va='bottom')
+        plt.text(top_left_pos[0], top_left_pos[1], text_top_left, ha='left', va='top')
 
         ###
         # Draw
         ###
         s = to_networkx(self.board.state, node_attrs=['pos', 'x'], edge_attrs=['edge_attr'])
-        nx.draw_networkx_nodes(s, s.pos, node_color=node_colors)
-        nx.draw_networkx_edges(s, s.pos, edge_color=edge_colors, width=2)
+        nx.draw_networkx_nodes(s, self.board.state.pos, node_color=node_colors)
+        nx.draw_networkx_edges(s, self.board.state.pos, edge_color=edge_colors, width=2)
+        nx.draw_networkx_labels(s, self.board.state.pos)
         plt.axis('off')  # Hide axes
+        plt.axis('equal')
 
         ###
         # Save
         ###
         turn_appendix = int((self.turn - int(self.turn)) * self.n_players)
         folder = f"./Renders/Episode {int(self.episode)}/"
-        filename = "Turn {int(self.turn)}_{turn_appendix}.png"
-        os.makedirs(f"./Renders/Episode {int(self.episode)}/", exist_ok=True)
+        filename = f"Turn {int(self.turn)}_{turn_appendix}.png"
+        os.makedirs(folder, exist_ok=True)
         plt.savefig(os.path.join(folder, filename))
+        plt.close()

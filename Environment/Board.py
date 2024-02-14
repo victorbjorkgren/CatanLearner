@@ -4,7 +4,7 @@ import torch_geometric.data as pyg_data
 
 from HexGrid.HexGrid import make_hex_grid
 
-from constants import *
+from .constants import *
 
 
 class ExtendedData(pyg_data.Data):
@@ -25,7 +25,7 @@ class Board:
     Node states: village = 1, town = 2
     [me, enemy0, ..., enemyK]
     """
-    def __init__(self, n_players, rendering=False):
+    def __init__(self, n_players):
         self.n_players = n_players
 
         # init states
@@ -46,22 +46,24 @@ class Board:
         v_cum = [sum(verts_per_row[:i]) for i in range(0, len(verts_per_row) + 1)]
         f_cum = [sum(face_per_row[:i]) for i in range(0, len(face_per_row) + 1)]
         face_inds = torch.zeros((N_TILES, 6), dtype=torch.long)
-        # row = 0
         for row in range(len(face_per_row)):
             for col in range(face_per_row[row]):
 
                 if verts_per_row[row] < verts_per_row[row + 1]:
                     row_offset = 1
-                elif verts_per_row[row] == verts_per_row[row + 1]:
-                    row_offset = 0
                 else:
-                    row_offset = -1
+                    row_offset = 0
 
-                col_offset = max(0, col * 3 - 1)
+                if row >= 3:
+                    step_down_offset = 1
+                else:
+                    step_down_offset = 0
+
+                col_offset = max(0, col * 2)
                 inds = [
-                    v_cum[row] + 0 + col_offset,
-                    v_cum[row] + 1 + col_offset,
-                    v_cum[row] + 2 + col_offset,
+                    v_cum[row] + 0 + col_offset + step_down_offset,
+                    v_cum[row] + 1 + col_offset + step_down_offset,
+                    v_cum[row] + 2 + col_offset + step_down_offset,
                     v_cum[row + 1] + 0 + col_offset + row_offset,
                     v_cum[row + 1] + 1 + col_offset + row_offset,
                     v_cum[row + 1] + 2 + col_offset + row_offset
@@ -71,10 +73,10 @@ class Board:
         # Make PyG state
         grid = from_networkx(grid)
 
-        if rendering:
-            pos = grid.pos
-        else:
-            pos = None
+        # if rendering:
+        pos = grid.pos
+        # else:
+        #     pos = None
 
         self.state = ExtendedData(
             edge_index=grid.edge_index,
@@ -101,15 +103,20 @@ class Board:
     def can_build_village(self, node_id, player):
         adj_mask = (self.state.edge_index == node_id).any(0)
         edges_adj = self.state.edge_index[:, adj_mask]
-        neighbor_nodes = edges_adj.unique()
+        neighborhood_nodes = edges_adj.unique()
+        adjacent_nodes = neighborhood_nodes[neighborhood_nodes != node_id]
 
         roads = self.state.edge_attr[adj_mask, player].nonzero().numel()
-        buildings = self.state.x[neighbor_nodes, :].nonzero().numel()
+        adjacent_buildings = self.state.x[adjacent_nodes, :].nonzero().numel()
+        my_buildings = self.state.x[node_id, player]
+        other_players_buildings = (self.state.x[node_id, player].sum() - my_buildings)
 
-        is_free = buildings == 0
+        is_free = (adjacent_buildings == 0) & (other_players_buildings == 0) & (my_buildings < 2)
         has_connection = roads != 0
 
-        return is_free & has_connection
+        current_size = self.state.x
+
+        return is_free & has_connection, my_buildings
 
     def can_build_road(self, edge_id, player):
         edge_index = self.state.edge_index
