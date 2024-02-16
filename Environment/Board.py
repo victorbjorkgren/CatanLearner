@@ -100,7 +100,7 @@ class Board:
         self.state.edge_attr[uv_indices, player] = 1
         self.state.edge_attr[vu_indices, player] = 1
 
-    def can_build_village(self, node_id, player):
+    def can_build_village(self, node_id, player, first_turn=False):
         adj_mask = (self.state.edge_index == node_id).any(0)
         edges_adj = self.state.edge_index[:, adj_mask]
         neighborhood_nodes = edges_adj.unique()
@@ -114,11 +114,9 @@ class Board:
         is_free = (adjacent_buildings == 0) & (other_players_buildings == 0) & (my_buildings < 2)
         has_connection = roads != 0
 
-        current_size = self.state.x
+        return is_free & (has_connection | first_turn), my_buildings
 
-        return is_free & has_connection, my_buildings
-
-    def can_build_road(self, edge_id, player):
+    def can_build_road(self, edge_id, player, first_turn=False):
         edge_index = self.state.edge_index
 
         # Extract the specific edge nodes
@@ -131,6 +129,9 @@ class Board:
 
         # Check if any of these values are non-zero
         is_free = edge_value_self.nonzero().numel() == 0
-        has_connection = edge_value_neighbor.nonzero().numel() > 0
+        if first_turn:
+            has_connection = (self.state.x[u, player] > 0) | (self.state.x[v, player] > 0)
+        else:
+            has_connection = edge_value_neighbor.nonzero().numel() > 0
 
         return is_free & has_connection
