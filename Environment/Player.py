@@ -1,3 +1,5 @@
+import torch
+
 ###
 # Player states:
 #
@@ -18,7 +20,7 @@ class Player:
 
     @property
     def state(self):
-        return self.hand + [self.points]
+        return torch.tensor(self.hand + [self.points], dtype=torch.float)
 
     def add(self, ind, n):
         self.hand[ind] += n
