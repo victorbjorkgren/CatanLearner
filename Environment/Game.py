@@ -6,34 +6,92 @@ import numpy as np
 import torch
 from torch_geometric.utils.convert import to_networkx
 
+from Learner.Agents import RandomAgent
 from .Board import Board
 from .Player import Player
 from .constants import *
 
 
 class Game:
-    def __init__(self, player_agents: [], max_turns=500, start_episode=0):
-        assert len(player_agents) == 2
+    def __init__(self, n_players, max_turns=500, max_no_progress=50, start_episode=0):
+        self.max_no_progress = max_no_progress
+        self.n_players = n_players
+        self.max_turns = max_turns
+        self.episode = start_episode
+
+        self.first_turn_switch = None
+        self.first_turn = None
+        self.current_player = None
+        self.player_agents = None
         self.players = None
         self.board = None
         self.turn = None
 
-        self.player_agents = player_agents
-        self.max_turns = max_turns
-        self.episode = start_episode
+        # Placeholder inits
+        self.board = Board(self.n_players)
+        self.players = [Player(RandomAgent()) for _ in range(self.n_players)]
 
-        self.n_players = len(player_agents)
-
-        self.reset()
+        self.zero_reward = torch.zeros((self.n_players,))
 
     def reset(self):
         self.turn = 0
         self.episode += 1
         self.board = Board(self.n_players)
         self.players = [Player(agent) for agent in self.player_agents]
-
+        self.current_player = 0
+        self.first_turn = True
+        self.first_turn_switch = False
+    
+    def set_agents(self, player_agents: []):
+        assert len(player_agents) == self.n_players
+        self.player_agents = player_agents
+    
     def start(self, render=False):
         return self.game_loop(render)
+
+    def step(self, action, render=False):
+        if self.first_turn:
+            if self.first_turn_switch:
+                build_succeeded = self.build_village(action[1], self.current_player, first_turn=True)
+            else:
+                build_succeeded = self.build_road(action[1], self.current_player, first_turn=True)
+            if build_succeeded:
+                # Check if first turn has ended
+                if self.current_player == (self.n_players - 1):
+                    if self.players[self.current_player].n_roads == 2:
+                        self.first_turn = False
+                        # Give resources to all villages
+                        face_hits = torch.nonzero(self.board.state.face_attr)
+                        for hit in face_hits:
+                            self.give_resource(hit)
+                self.current_player = (self.current_player + 1) % self.n_players
+                if self.current_player == 0:
+                    self.first_turn_switch = not self.first_turn_switch
+
+        if action[0] == 0:
+            self.current_player = (self.current_player + 1) % self.n_players
+            self.turn += 1 / self.n_players
+            if render:
+                self.render()
+            if self.current_player == 0:
+                self.resource_step()
+
+        elif action[0] == 1:
+            self.build_road(action[1], self.current_player)
+
+        elif action[0] == 2:
+            self.build_village(action[1], self.current_player)
+
+        if self.game_on():
+            return self, self.zero_reward
+        else:
+            points = torch.tensor([e.points for e in self.players])
+            winner = points >= 10
+            if winner.sum() >= 1:
+                rewards = winner.float() * 2 - 1
+            else:
+                rewards = torch.zeros_like(winner, dtype=torch.float)
+            return self, rewards
 
     def take_first_turn(self):
         for player in range(self.n_players):
@@ -51,13 +109,17 @@ class Game:
     def build_free_village(self, player):
         village_built = False
         while not village_built:
-            chosen_building = self.players[player].agent.sample_building(self.board, self.players, player)
+            chosen_building = self.players[player].agent.sample_village(
+                self,
+                self.board.get_village_mask(player, self.players[player].hand, True),
+                player)
             village_built = self.build_village(chosen_building, player, first_turn=True)
 
     def build_free_road(self, player):
         road_built = False
         while not road_built:
-            chosen_road = self.players[player].agent.sample_road(self.board, self.players, player)
+            chosen_road = self.players[player].agent.sample_road(
+                self, self.board.get_road_mask(player, self.players[player].hand, True), player)
             road_built = self.build_road(chosen_road, player, first_turn=True)
 
     def game_loop(self, render=False):
@@ -88,19 +150,31 @@ class Game:
         turn_completed = False
         while not turn_completed:
             action_type, action_index = self.players[current_player].sample_action(
-                self.board,
-                self.players,
+                self,
+                self.board.get_road_mask(current_player, self.players[current_player].hand),
+                self.board.get_village_mask(current_player, self.players[current_player].hand),
                 i_am_player=current_player
             )
 
             turn_completed = self.take_action(action_type, current_player, action_index)
 
     def game_on(self):
+        for player in self.players:
+            if player.points >= 10:
+                return False
+
         if self.turn >= self.max_turns:
             return False
-        for hand in self.players:
-            if hand.points >= 10:
+
+        if self.turn == self.max_no_progress:
+            progress = False
+            for player in self.players:
+                if player.points != 2:
+                    progress = True
+                    break
+            if not progress:
                 return False
+
         return True
 
     def resource_step(self):
@@ -148,6 +222,7 @@ class Game:
             ):
                 self.players[player].sub(0, 1)
                 self.players[player].sub(3, 1)
+                self.players[player].n_roads += 1
                 self.board.update_edges(index, player)
                 return True
         return False
@@ -169,6 +244,7 @@ class Game:
                     self.players[player].sub(4, 1)
                     self.board.state.x[index, player] = size + 1
                     self.players[player].points += 1
+                    self.players[player].n_villages += 1
                     return True
             if size == 1:
                 # [Bricks, Grains, Ores, Lumbers, Wools]

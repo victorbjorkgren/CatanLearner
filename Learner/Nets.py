@@ -3,7 +3,7 @@ import torch as T
 import torch.nn as nn
 import torch_geometric as pyg
 
-from .Utils import extract_attr, sparse_face_matrix, preprocess_adj
+from .Utils import extract_attr, sparse_face_matrix, preprocess_adj, sparse_misc_node
 from .Layers import MLP, PowerfulLayer, MultiHeadAttention
 
 
@@ -61,13 +61,19 @@ class GameNet(nn.Module):
         n_player_attr = game.players[0].state.shape[0]
         n_players = len(game.players)
 
+        self.n_output = n_output
+        self.n_embed = n_embed
         self.undirected_faces = undirected_faces
         self.sparse_edge = sparse_edge
         self.sparse_face = sparse_face_matrix(sparse_face, to_undirected=self.undirected_faces)
-        self.sparse_full = T.cat((self.sparse_edge, self.sparse_face), dim=1)
+        self.sparse_pass_node = sparse_misc_node(sparse_edge.max(), self.sparse_face.max() + 1)
+        self.sparse_full = T.cat((self.sparse_edge, self.sparse_face, self.sparse_pass_node), dim=1)
+
         self.edge_adj = pyg.utils.to_dense_adj(self.sparse_edge)
         self.face_adj = pyg.utils.to_dense_adj(self.sparse_face)
         self.full_adj = pyg.utils.to_dense_adj(self.sparse_full)
+        self.full_adj = self.full_adj + T.eye(self.full_adj.shape[-1])
+        self.full_mask = self.full_adj > 0
 
         self.face_adj_norm = preprocess_adj(self.face_adj, batch_size)
         self.edge_adj_norm = preprocess_adj(self.edge_adj, batch_size)
@@ -95,17 +101,19 @@ class GameNet(nn.Module):
         face_embedding = self.face_embed(face_x)
 
         # TODO: Take batch into account
-        node_embedding = T.cat((node_embedding, face_embedding))
-        node_matrix = T.diag_embed(node_embedding.permute(1, 0)).permute(1, 2, 0)
+        node_embedding = T.cat((node_embedding, face_embedding, T.zeros((1, self.n_embed))))
+        node_matrix = T.diag_embed(node_embedding.permute(1, 0)).permute(1, 2, 0).unsqueeze(0)
 
         face_embedding = face_embedding.repeat_interleave(6, 0)
         if self.undirected_faces:
             face_embedding = torch.cat((face_embedding, face_embedding.flip(0)), dim=0)
-        connection_embedding = T.cat((edge_embedding, face_embedding))
+        connection_embedding = T.cat((edge_embedding, face_embedding, torch.zeros((node_x.shape[0], node_embedding.shape[1]))))
         connection_matrix = pyg.utils.to_dense_adj(self.sparse_full, edge_attr=connection_embedding)
 
         full_matrix = node_matrix + connection_matrix
 
         full_matrix = self.power_layers(full_matrix)
 
-        return self.output_embed(full_matrix)
+        out = T.zeros(full_matrix.shape[0], full_matrix.shape[1], full_matrix.shape[2], self.n_output)
+        out[self.full_mask] = self.output_embed(full_matrix[self.full_mask])
+        return out

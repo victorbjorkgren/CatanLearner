@@ -26,6 +26,11 @@ def sparse_face_matrix(face_index, to_undirected):
         connections = T.cat((connections, connections.flip(0)), dim=1)
     return connections
 
+def sparse_misc_node(node_n, misc_n):
+    node_range = T.arange(node_n + 1)
+    sparse = T.stack((node_range, T.full_like(node_range, misc_n)), dim=0)
+    return sparse
+
 
 def preprocess_adj(adj, batch_size):
     I = T.eye(adj.size(1)).to(adj.device)

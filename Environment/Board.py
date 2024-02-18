@@ -116,6 +116,25 @@ class Board:
 
         return is_free & (has_connection | first_turn), my_buildings
 
+    def get_village_mask(self, player, hand, first_turn=False) -> torch.Tensor:
+        mask = torch.zeros((self.state.num_nodes, ), dtype=torch.bool)
+        for node_id in range(self.state.num_nodes):
+            can_build, size = self.can_build_village(node_id, player, first_turn)
+            if can_build & (size == 0) & (hand >= torch.tensor([1, 1, 0, 1, 1])).all():
+                mask[node_id] = True
+            if can_build & (size == 1) & (hand >= torch.tensor([0, 2, 3, 0, 0])).all():
+                mask[node_id] = True
+        return mask
+
+    def get_road_mask(self, player, hand, first_turn=False) -> torch.Tensor:
+        mask = torch.zeros((self.state.num_edges,), dtype=torch.bool)
+        if (hand < torch.tensor([1, 0, 0, 1, 0])).any():
+            return mask
+        for edge_id in range(self.state.num_edges):
+            can_build = self.can_build_road(edge_id, player, first_turn)
+            mask[edge_id] = can_build
+        return mask
+
     def can_build_road(self, edge_id, player, first_turn=False):
         edge_index = self.state.edge_index
 
