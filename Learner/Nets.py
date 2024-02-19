@@ -69,11 +69,22 @@ class GameNet(nn.Module):
         self.sparse_pass_node = sparse_misc_node(sparse_edge.max(), self.sparse_face.max() + 1)
         self.sparse_full = T.cat((self.sparse_edge, self.sparse_face, self.sparse_pass_node), dim=1)
 
-        self.edge_adj = pyg.utils.to_dense_adj(self.sparse_edge)
-        self.face_adj = pyg.utils.to_dense_adj(self.sparse_face)
+        # TODO: Fix Magic Numbers
+        self.node_adj = T.eye(74, dtype=T.long).unsqueeze(0)
+        self.node_adj[:, 54:, 54:] = 0
+        self.edge_adj = pyg.utils.to_dense_adj(self.sparse_edge, max_num_nodes=74)
+        self.face_adj = pyg.utils.to_dense_adj(self.sparse_face, max_num_nodes=74)
+        self.face_adj = self.face_adj + T.eye(self.face_adj.shape[-1])
+        self.face_adj[0, self.node_adj[0]] = 0
         self.full_adj = pyg.utils.to_dense_adj(self.sparse_full)
         self.full_adj = self.full_adj + T.eye(self.full_adj.shape[-1])
         self.full_mask = self.full_adj > 0
+
+        self.state_matrix = T.zeros((self.full_mask.shape[0], self.full_mask.shape[1], self.full_mask.shape[2], self.n_embed))
+        self.out_matrix = T.zeros((self.state_matrix.shape[0], self.state_matrix.shape[1], self.state_matrix.shape[2], self.n_output))
+        self.node_mask = self.node_adj > 0
+        self.edge_mask = self.edge_adj > 0
+        self.face_mask = self.face_adj > 0
 
         self.face_adj_norm = preprocess_adj(self.face_adj, batch_size)
         self.edge_adj_norm = preprocess_adj(self.edge_adj, batch_size)
@@ -83,7 +94,8 @@ class GameNet(nn.Module):
         self.edge_embed = MLP(n_edge_attr + n_players * n_player_attr, n_embed)
         self.face_embed = MLP(n_face_attr, n_embed)
 
-        self.output_embed = MLP(n_embed, n_output, final=True)
+        self.action_value = MLP(n_embed, n_output, final=True)
+        self.state_value = MLP(n_embed, n_output, final=True)
 
         self.power_layers = nn.Sequential(*[
 
@@ -92,28 +104,49 @@ class GameNet(nn.Module):
 
         ])
 
-    def forward(self, game):
+    def forward(self, observation):
+        obs_matrix = self.state_matrix.clone()
+
+        obs_matrix[self.node_mask] = self.node_embed(observation[self.node_mask])
+        obs_matrix[self.edge_mask] = self.edge_embed(observation[self.edge_mask])
+        obs_matrix[self.face_mask] = self.face_embed(observation[self.face_mask][:, :6])
+
+        obs_matrix = self.power_layers(obs_matrix)
+
+        action_matrix = self.out_matrix.clone()
+        state_matrix = self.out_matrix.clone()
+
+        action_matrix[self.full_mask] = self.action_value(obs_matrix[self.full_mask])
+        state_matrix[self.full_mask] = self.state_value(obs_matrix[self.full_mask])
+
+        return action_matrix + state_matrix - action_matrix.mean(dim=-1, keepdim=True)
+
+    def clone_state(self, other):
+        self.load_state_dict(other.state_dict())
+
+    def save(self):
+        torch.save(self.state_dict(), f'./{self.name}_state.pth')
+
+    def load(self):
+        self.load_state_dict(torch.load(f'./{self.name}_state.pth'))
+
+    def get_dense(self, game):
         node_x, edge_x, face_x = extract_attr(game)
 
-        # [N, Features]
-        node_embedding = self.node_embed(node_x)
-        edge_embedding = self.edge_embed(edge_x)
-        face_embedding = self.face_embed(face_x)
+        # Normalize-ish
+        node_x /= 2
+        face_x /= 12
 
-        # TODO: Take batch into account
-        node_embedding = T.cat((node_embedding, face_embedding, T.zeros((1, self.n_embed))))
-        node_matrix = T.diag_embed(node_embedding.permute(1, 0)).permute(1, 2, 0).unsqueeze(0)
-
-        face_embedding = face_embedding.repeat_interleave(6, 0)
+        pass_x = T.zeros_like(node_x)
+        # TODO: Make board size and n_player invariant
+        face_x = T.cat((face_x, T.zeros(19, 8)), dim=1)
+        node_x = T.cat((node_x, face_x, T.zeros((1, 14))))
+        node_matrix = T.diag_embed(node_x.permute(1, 0)).permute(1, 2, 0).unsqueeze(0)
+        face_x = face_x.repeat_interleave(6, 0)
         if self.undirected_faces:
-            face_embedding = torch.cat((face_embedding, face_embedding.flip(0)), dim=0)
-        connection_embedding = T.cat((edge_embedding, face_embedding, torch.zeros((node_x.shape[0], node_embedding.shape[1]))))
-        connection_matrix = pyg.utils.to_dense_adj(self.sparse_full, edge_attr=connection_embedding)
+            face_x = T.cat((face_x, face_x.flip(0)), dim=0)
+        connection_x = T.cat((edge_x, face_x, pass_x))
+        connection_matrix = pyg.utils.to_dense_adj(self.sparse_full, edge_attr=connection_x)
 
         full_matrix = node_matrix + connection_matrix
-
-        full_matrix = self.power_layers(full_matrix)
-
-        out = T.zeros(full_matrix.shape[0], full_matrix.shape[1], full_matrix.shape[2], self.n_output)
-        out[self.full_mask] = self.output_embed(full_matrix[self.full_mask])
-        return out
+        return full_matrix
