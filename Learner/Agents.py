@@ -65,6 +65,8 @@ class RandomAgent(Agent):
         else:
             Exception("Random Agent chose illegal action")
 
+        breakpoint()
+
     def sample_village(self, game, village_mask, i_am_player) -> int:
         if village_mask.sum() > 0:
             available_villages = village_mask.argwhere().squeeze()
@@ -109,6 +111,10 @@ class QAgent(Agent):
 
         mask = self.mask_to_dense(road_mask, village_mask)
 
+        # TODO: Find root cause
+        if len(mask.shape) == 3:
+            mask = mask.squeeze()
+
         if mask.sum() == 0:
             return T.tensor((0, 0)), T.tensor((74, 74))
         with T.no_grad():
@@ -139,6 +145,8 @@ class QAgent(Agent):
             return T.tensor((1, index)), build_action
 
         elif build_action[0] == build_action[1]:
+            if build_action[0] >= 54:
+                breakpoint()
             return T.tensor((2, build_action[0])), build_action
         else:
             Exception("Invalid Build Action in QAgent")

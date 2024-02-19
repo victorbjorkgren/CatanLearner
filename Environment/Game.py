@@ -57,21 +57,22 @@ class Game:
     def start(self, render=False):
         return self.game_loop(render)
 
-    def step(self, action: tuple[int, int], render: bool = False) -> tuple[T.Tensor, bool, tuple[int, int]]:
+    def step(self, action: tuple[int, int], render: bool = False) -> tuple[T.Tensor, bool, bool]:
         """Take one action step in the game. Returns reward, done, and the actual action."""
+        succeeded = True
         if self.first_turn:
             self.first_turn_step(action)
-            return self.zero_reward, False, action
+            return self.zero_reward, False, succeeded
 
         if action[0] == 1:
             if not self.build_road(action[1], self.current_player):
-                action = (0, 0)
+                succeeded = False
 
         elif action[0] == 2:
             if not self.build_village(action[1], self.current_player):
-                action = (0, 0)
+                succeeded = False
 
-        if action[0] == 0:
+        if (action[0] == 0) | (not succeeded):
             self.current_player = (self.current_player + 1) % self.n_players
             self.turn += 1 / self.n_players
             if render:
@@ -80,7 +81,7 @@ class Game:
                 self.resource_step()
 
         if self.game_on():
-            return self.zero_reward, False, action
+            return self.zero_reward, False, succeeded
         else:
             points = T.tensor([e.points for e in self.players])
             winner = points >= 10
@@ -88,7 +89,7 @@ class Game:
                 rewards = winner.float() * 2 - 1
             else:
                 rewards = T.zeros_like(winner, dtype=T.float)
-            return rewards, True, action
+            return rewards, True, succeeded
 
     def first_turn_step(self, action) -> None:
         if self.first_turn_village_switch:

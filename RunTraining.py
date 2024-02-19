@@ -1,12 +1,9 @@
-from collections import deque
-
-import torch
+import torch as T
 from tqdm import tqdm
 
 from Environment.Game import Game
 from Learner.Agents import RandomAgent, QAgent
 from Learner.Nets import GameNet
-from Learner.PrioReplayBuffer import PrioReplayBuffer
 from Learner.Train import Trainer
 
 MAX_STEPS = 1_000_000
@@ -44,15 +41,20 @@ game.set_agents([
 ])
 game.reset()
 
-reward_history = torch.zeros((HISTORY_DISPLAY, 2))
-beat_time = torch.zeros((HISTORY_DISPLAY, 2))
+reward_history = T.zeros((HISTORY_DISPLAY, 2))
+beat_time = T.zeros((HISTORY_DISPLAY, 2))
 iterator = tqdm(range(MAX_STEPS))
 for i in iterator:
     observation = q_net.get_dense(game)
-    action, raw_action = game.current_agent.sample_action(game, observation, i_am_player=game.current_player)
-    reward, done, action = game.step(action, render=False)
+    try:
+        action, raw_action = game.current_agent.sample_action(game, observation, i_am_player=game.current_player)
+    except:
+        breakpoint()
+    reward, done, succeeded = game.step(action, render=False)
     new_observation = q_net.get_dense(game)
 
+    if not succeeded:
+        raw_action = T.tensor((74, 74))
     trainer.add(observation, raw_action, new_observation, reward, done, game.current_player)
     loss = trainer.train(i, game.episode)
 
