@@ -42,25 +42,31 @@ class PlayerNet(nn.Module):
         return output
 
 
+def nn_sum(tensor: T.Tensor) -> T.Tensor:
+    return tensor.permute(0,3,1,2).sum(-2, keepdims=True).sum(-1, keepdims=True).permute(0,2,3,1)
+
+
 class GameNet(nn.Module):
     def __init__(self,
                  game,
                  n_embed,
                  n_output,
                  n_power_layers,
+                 on_device,
                  batch_size=1,
-                 undirected_faces=True
+                 undirected_faces=False,
                  ):
         super(GameNet, self).__init__()
 
-        sparse_edge = game.board.state.edge_index
-        sparse_face = game.board.state.face_index
+        sparse_edge = game.board.state.edge_index.clone()
+        sparse_face = game.board.state.face_index.clone()
         n_node_attr = game.board.state.num_node_features
         n_edge_attr = game.board.state.num_node_features
         n_face_attr = game.board.state.face_attr.shape[1]
         n_player_attr = game.players[0].state.shape[0]
         n_players = len(game.players)
 
+        self.on_device = on_device
         self.n_output = n_output
         self.n_embed = n_embed
         self.undirected_faces = undirected_faces
@@ -80,11 +86,20 @@ class GameNet(nn.Module):
         self.full_adj = self.full_adj + T.eye(self.full_adj.shape[-1])
         self.full_mask = self.full_adj > 0
 
-        self.state_matrix = T.zeros((self.full_mask.shape[0], self.full_mask.shape[1], self.full_mask.shape[2], self.n_embed))
-        self.out_matrix = T.zeros((self.state_matrix.shape[0], self.state_matrix.shape[1], self.state_matrix.shape[2], self.n_output))
+        self.state_matrix = T.zeros(
+            (self.full_mask.shape[0], self.full_mask.shape[1], self.full_mask.shape[2], self.n_embed))
+        self.out_matrix = T.zeros(
+            (self.state_matrix.shape[0], self.state_matrix.shape[1], self.state_matrix.shape[2], self.n_output))
         self.node_mask = self.node_adj > 0
         self.edge_mask = self.edge_adj > 0
         self.face_mask = self.face_adj > 0
+        self.action_mask = (self.node_adj > 0) | (self.edge_adj > 0)
+        self.action_mask[:, -1, -1] = True
+
+        self.node_mask = self.node_mask.flatten()
+        self.edge_mask = self.edge_mask.flatten()
+        self.face_mask = self.face_mask.flatten()
+        self.full_mask = self.full_mask.flatten()
 
         self.face_adj_norm = preprocess_adj(self.face_adj, batch_size)
         self.edge_adj_norm = preprocess_adj(self.edge_adj, batch_size)
@@ -97,45 +112,103 @@ class GameNet(nn.Module):
         self.action_value = MLP(n_embed, n_output, final=True)
         self.state_value = MLP(n_embed, n_output, final=True)
 
-        self.power_layers = nn.Sequential(*[
+        self.power_layers = [
 
-            PowerfulLayer(n_embed, n_embed, self.full_adj_norm)
+            PowerfulLayer(n_embed, n_embed, self.full_adj_norm).to(self.on_device)
             for _ in range(n_power_layers)
 
-        ])
+        ]
+
+        self.state_matrix = self.state_matrix.to(self.on_device)
+        self.full_mask = self.full_mask.to(self.on_device)
+        self.out_matrix = self.out_matrix.to(self.on_device)
 
     def forward(self, observation):
+        observation = observation.to(self.on_device)
+        mask = ~self.action_mask.unsqueeze(-1).repeat(observation.shape[0], 1, 1, self.n_output).to(self.on_device)
+
+        obs_matrix = self.feature_embedding(observation)
+        for power_layer in self.power_layers:
+            obs_matrix = power_layer(obs_matrix)
+
+        action_matrix = self.action_value(obs_matrix)
+        state_matrix = self.state_value(obs_matrix)
+
+        action_matrix[mask] = 0
+        state_matrix[mask] = 0
+
+        mean_action = nn_sum(action_matrix) / nn_sum(mask)
+
+        q_matrix = action_matrix + (state_matrix - mean_action)
+        return q_matrix
+
+    def feature_embedding(self, observation):
         batch = observation.shape[0]
-        obs_matrix = self.state_matrix.clone().repeat((batch, 1, 1, 1))
+        f = observation.shape[-1]
 
-        obs_matrix[self.node_mask.repeat((batch, 1, 1))] = self.node_embed(observation[self.node_mask.repeat((batch, 1, 1))])
-        obs_matrix[self.edge_mask.repeat((batch, 1, 1))] = self.edge_embed(observation[self.edge_mask.repeat((batch, 1, 1))])
-        obs_matrix[self.face_mask.repeat((batch, 1, 1))] = self.face_embed(observation[self.face_mask.repeat((batch, 1, 1))][:, :6])
+        observation = observation.permute(0, 3, 1, 2).reshape((batch, f, -1))
+        obs_matrix = (self.state_matrix.clone()
+                      .repeat((batch, 1, 1, 1))
+                      .reshape((batch, self.n_embed, -1))
+                      .permute(0, 2, 1))
 
-        obs_matrix = self.power_layers(obs_matrix)
+        node_f = observation[:, :, self.node_mask].permute(0, 2, 1)
+        edge_f = observation[:, :, self.edge_mask].permute(0, 2, 1)
+        face_f = observation[:, :6, self.face_mask].permute(0, 2, 1)
 
-        action_matrix = self.out_matrix.clone().repeat((batch, 1, 1, 1))
-        state_matrix = self.out_matrix.clone().repeat((batch, 1, 1, 1))
+        obs_matrix[:, self.node_mask, :] = self.node_embed(node_f)
+        obs_matrix[:, self.edge_mask, :] = self.edge_embed(edge_f)
+        obs_matrix[:, self.face_mask, :] = self.face_embed(face_f)
 
-        action_matrix[self.full_mask.repeat((batch, 1, 1))] = self.action_value(obs_matrix[self.full_mask.repeat((batch, 1, 1))])
-        state_matrix[self.full_mask.repeat((batch, 1, 1))] = self.state_value(obs_matrix[self.full_mask.repeat((batch, 1, 1))])
+        obs_matrix = (obs_matrix
+                      .permute(0, 2, 1)
+                      .reshape((batch, 74, 74, 16)))
 
-        return action_matrix + state_matrix - action_matrix.mean(dim=-1, keepdim=True)
+        return obs_matrix
+
+    def duel_head(self, obs_matrix):
+        batch = obs_matrix.shape[0]
+        f = obs_matrix.shape[-1]
+        # action_matrix = (self.out_matrix.clone()
+        #                  .repeat((batch, 1, 1, 1))
+        #                  .reshape((batch, self.n_output, -1))
+        #                  .permute(0, 2, 1))
+        # state_matrix = action_matrix.clone()
+
+        # out_mask = self.action_mask.unsqueeze(-1).repeat(batch, 1, 1, self.n_output)
+        # obs_matrix = obs_matrix.permute(0, 3, 1, 2).reshape((batch, f, -1))
+
+        # embed_f = obs_matrix[:, :, self.action_mask].permute(0, 2, 1)
+
+        # action_matrix[:, self.action_mask, :] = self.action_value(embed_f)
+        # state_matrix[:, self.action_mask, :] = self.state_value(embed_f)
+
+        # action_matrix = (action_matrix
+        #                  .permute(0, 2, 1)
+        #                  .reshape((batch, 74, 74, self.n_output)))
+        # state_matrix = (state_matrix
+        #                 .permute(0, 2, 1)
+        #                 .reshape((batch, 74, 74, self.n_output)))
+
+        # action_matrix[out_mask] = self.action_value(obs_matrix[in_mask])
+
+        return action_matrix, state_matrix
 
     def clone_state(self, other):
         self.load_state_dict(other.state_dict())
 
     def save(self):
-        torch.save(self.state_dict(), f'./{self.name}_state.pth')
+        torch.save(self.state_dict(), f'./q_net_state.pth')
 
     def load(self):
-        self.load_state_dict(torch.load(f'./{self.name}_state.pth'))
+        self.load_state_dict(torch.load(f'./q_net_state.pth'))
 
     def get_dense(self, game):
         node_x, edge_x, face_x = extract_attr(game)
 
         # Normalize-ish
-        node_x /= 2
+        node_x /= 10
+        edge_x /= 10
         face_x /= 12
 
         pass_x = T.zeros_like(node_x)
@@ -150,4 +223,4 @@ class GameNet(nn.Module):
         connection_matrix = pyg.utils.to_dense_adj(self.sparse_full, edge_attr=connection_x)
 
         full_matrix = node_matrix + connection_matrix
-        return full_matrix
+        return full_matrix, game.current_player

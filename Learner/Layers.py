@@ -2,10 +2,15 @@ import torch as T
 import torch.nn as nn
 import torch.nn.functional as F
 
+from Learner.Utils import preprocess_adj
+
+
 class MLP(nn.Module):
-    def __init__(self, in_features, out_features, final=False):
+    def __init__(self, in_features: int, out_features: int, final: bool=False, feature_dim: int = -1) -> None:
         super(MLP, self).__init__()
         self.final = final
+        assert feature_dim in [-1, 1]
+        self.feature_dim = feature_dim
         hidden = max(in_features, out_features)
         self.l1 = nn.Linear(in_features, hidden)
         self.l2 = nn.Linear(hidden, out_features)
@@ -25,41 +30,70 @@ class MLP(nn.Module):
                 self.act
             ])
 
-    def forward(self, x):
-        return self.mlp(x)
+    def forward(self, x: T.Tensor) -> T.Tensor:
+        if self.feature_dim == 1:
+            x = x.permute(0, 2, 1)
+            x = self.mlp(x)
+            x = x.permute(0, 2, 1)
+        else:
+            x = self.mlp(x)
+        return x
+
+
+def norm(adj):
+    # I = T.eye(adj.size(1)).to(adj.device)
+    # A_hat = adj + I
+    d_hat_diag = T.sum(adj, dim=2).pow(-0.5)
+    d_hat = T.diag_embed(d_hat_diag.mean(-1)).unsqueeze(1)
+    adj_normalized = (d_hat @ adj.permute(0, 3, 1, 2)) @ d_hat
+    return adj_normalized
 
 
 class PowerfulLayer(nn.Module):
-    def __init__(self, in_features, out_features, adj_norm):
+    def __init__(self, in_features: int, out_features: int, adj_norm: T.Tensor) -> None:
         super(PowerfulLayer, self).__init__()
         self.adj_norm = adj_norm.unsqueeze(-1)
         self.mask = adj_norm > 0
+        self.mask = self.mask.squeeze()
 
-        self.m1 = MLP(in_features, out_features)
-        self.m2 = MLP(in_features, out_features)
-        # self.gate = MLP(2 * in_features, out_features)
+        self.m1 = MLP(in_features, out_features, feature_dim=-1)
+        self.m2 = MLP(in_features, out_features, feature_dim=-1)
+        self.g1 = MLP(2 * in_features, out_features)
 
-    def forward(self, matrix):
+    def forward(self, matrix: T.Tensor) -> T.Tensor:
         """
         matrix shape = (B, N, N, features)
         norm shape = (B, N, N)
         """
+        # if matrix.device != self.adj_norm.device:
+        #     self.adj_norm = self.adj_norm.to(matrix.device)
 
-        out1 = matrix.clone()
-        out2 = matrix.clone()
+        # matrix = matrix.permute(0, 3, 1, 2)  # batch, out_feat, N, N
+        # out1 = matrix.clone()
+        # out2 = matrix.clone()
+        #
+        # # Feature Embedding
+        # out1[:, :, self.mask] = self.m1(matrix[:, :, self.mask])
+        # out2[:, :, self.mask] = self.m2(matrix[:, :, self.mask])
 
-        out1[self.mask] = self.m1(matrix[self.mask])
-        out2[self.mask] = self.m2(matrix[self.mask])
+        # adj_norm = norm(matrix)
 
-        out1 = out1.permute(0, 3, 1, 2)  # batch, out_feat, N, N
-        out2 = out2.permute(0, 3, 1, 2)  # batch, out_feat, N, N
+        out1 = self.m1(matrix).permute(0, 3, 1, 2)  # batch, out_feat, N, N
+        out2 = self.m2(matrix).permute(0, 3, 1, 2)  # batch, out_feat, N, N
 
+        # Message Propagation
         out = out1 @ out2
         del out1, out2
 
-        # Return Residual
-        out = out.permute(0, 2, 3, 1) + matrix
-        return out * self.adj_norm
+        # Add Gated Residual
+        out = T.cat((out.permute(0, 2, 3, 1), matrix), dim=3)  # batch, N, N, out_feat
+        del matrix
+
+        out = self.g1(out) # .permute(0, 3, 1, 2)
+
+        # Reshape and Norm
+        # out = (adj_norm @ out).permute(0, 2, 3, 1)
+        return out
 
         # # Return Gated Residual
         # out = T.cat((out, matrix), dim=3)  # batch, N, N, out_feat

@@ -1,6 +1,6 @@
 import torch as T
 
-from Learner.Agents import Agent
+from Learner.Agents import BaseAgent
 
 
 ###
@@ -10,7 +10,7 @@ from Learner.Agents import Agent
 # [Bricks, Grains, Ores, Lumbers, Wools]
 #
 class Player:
-    def __init__(self, agent: Agent):
+    def __init__(self, agent: BaseAgent):
         self.hand = T.tensor([0, 0, 0, 0, 0])
         self.points = 0
         self.n_villages = 0

@@ -8,7 +8,7 @@ import numpy as np
 import torch as T
 from torch_geometric.utils.convert import to_networkx
 
-from Learner.Agents import RandomAgent
+from Learner.Agents import BaseAgent, RandomAgent
 from .Board import Board
 from .Player import Player
 from .constants import *
@@ -28,6 +28,7 @@ class Game:
         self.players = None
         self.board = None
         self.turn = None
+        self.idle_turns = None
 
         # Placeholder inits
         self.board = Board(self.n_players)
@@ -42,6 +43,7 @@ class Game:
 
     def reset(self):
         self.turn = 0
+        self.idle_turns = 0
         self.episode += 1
         self.board = Board(self.n_players)
         self.players = [Player(agent) for agent in self.player_agents]
@@ -49,8 +51,9 @@ class Game:
         self.first_turn = True
         self.first_turn_village_switch = True
         self.publish('reset')
+        self.render()
 
-    def set_agents(self, player_agents: []):
+    def set_agents(self, player_agents: [BaseAgent, BaseAgent]):
         assert len(player_agents) == self.n_players
         self.player_agents = player_agents
 
@@ -73,12 +76,14 @@ class Game:
                 succeeded = False
 
         if (action[0] == 0) | (not succeeded):
+            self.idle_turns += 1
             self.current_player = (self.current_player + 1) % self.n_players
             self.turn += 1 / self.n_players
+            self.resource_step()
             if render:
                 self.render()
-            if self.current_player == 0:
-                self.resource_step()
+        else:
+            self.idle_turns = 0
 
         if self.game_on():
             return self.zero_reward, False, succeeded
@@ -180,14 +185,17 @@ class Game:
         if self.turn >= self.max_turns:
             return False
 
-        if self.turn == self.max_no_progress:
-            progress = False
-            for player in self.players:
-                if player.points != 2:
-                    progress = True
-                    break
-            if not progress:
-                return False
+        # if self.turn == self.max_no_progress:
+        #     progress = False
+        #     for player in self.players:
+        #         if player.points != 2:
+        #             progress = True
+        #             break
+        #     if not progress:
+        #         return False
+
+        if (self.idle_turns / 2) > self.max_no_progress:
+            return False
 
         return True
 
@@ -284,7 +292,7 @@ class Game:
             for listener in self.listeners[event_type]:
                 listener(data)
 
-    def render(self, debug=False):
+    def render(self, training_img=False, debug=False):
         if self.n_players != 2:
             print("Rendering not implemented for more than two players.")
             return
@@ -377,9 +385,12 @@ class Game:
         ###
         # Save
         ###
-
-        folder = f"./Renders/Episode {int(self.episode)}/"
-        filename = f"Turn {int(self.turn)}_{turn_appendix}.png"
+        if training_img:
+            folder = f"./Renders/Training/"
+            filename = f"Ep {self.episode}-{int(self.turn)} -- {self.player_agents[0]} vs {self.player_agents[1]}.png"
+        else:
+            folder = f"./Renders/Test/Episode {int(self.episode)}/"
+            filename = f"Turn {int(self.turn)}_{turn_appendix}.png"
         os.makedirs(folder, exist_ok=True)
         plt.savefig(os.path.join(folder, filename))
         plt.close()

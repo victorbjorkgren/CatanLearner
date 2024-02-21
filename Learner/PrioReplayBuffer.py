@@ -1,10 +1,5 @@
-from collections import deque
-
 import numpy as np
 import torch as T
-import torch_geometric as pyg
-
-from Learner.Utils import extract_attr, sparse_face_matrix, sparse_misc_node
 
 
 def assert_capacity(n):
@@ -47,8 +42,8 @@ def assert_capacity(n):
 #         return extract_attr(game)
 
 
-def reorder_players(tensor, i):
-    return T.cat((tensor[..., [i]], tensor[..., :i], tensor[..., i + 1:]), dim=-1)
+# def reorder_players(tensor, i):
+#     return T.cat((tensor[..., [i]], tensor[..., :i], tensor[..., i + 1:]), dim=-1)
 
 
 class PrioReplayBuffer:
@@ -68,10 +63,11 @@ class PrioReplayBuffer:
         # TODO: Fix Magic Numbers
         self.data = {
             'state': T.zeros((capacity, 74, 74, 14)),
-            'action': T.zeros((capacity, 2)),
+            'action': T.zeros((capacity, 2), dtype=T.long),
             'new_state': T.zeros((capacity, 74, 74, 14)),
             'reward': T.zeros((capacity, 2)),
             'done': T.zeros((capacity,)),
+            'player': T.zeros((capacity,), dtype=T.long),
             'prio': np.zeros((capacity,))
         }
 
@@ -79,20 +75,24 @@ class PrioReplayBuffer:
         self.size = 0
 
     def add(self, state, action, new_state, reward, done, i_am_player):
-        idx = self.next_idx
+        if self.is_full:
+            idx = self.min_prio_idx
+        else:
+            idx = self.next_idx
+            self.next_idx = (idx + 1) % self.capacity
 
         # TODO: Find root cause of this issue
         if len(action.shape) > 1:
             action = action.squeeze()
 
-        self.data['state'][idx] = reorder_players(state, i_am_player)
-        self.data['action'][idx] = action
-        self.data['new_state'][idx] = reorder_players(new_state, i_am_player)
-        self.data['reward'][idx] = reward[i_am_player]
+        self.data['state'][idx] = state
+        self.data['action'][idx] = action.long()
+        self.data['new_state'][idx] = new_state
+        self.data['reward'][idx] = reward
         self.data['done'][idx] = done
+        self.data['player'][idx] = i_am_player
         self.data['prio'][idx] = self.max_priority ** self.alpha
 
-        self.next_idx = (idx + 1) % self.capacity
         self.size = min(self.capacity, self.size + 1)
 
     def sample(self, n):
@@ -112,6 +112,17 @@ class PrioReplayBuffer:
 
         return samples
 
-    def update_prio(self, ind: T.Tensor, prio: T.Tensor):
-        self.data['prio'][ind] = prio.clamp_max(self.max_priority)
+    def update_prio(self, ind: T.Tensor, prio: np.array):
+        self.data['prio'][ind] = prio.clip(max=self.max_priority)
 
+    @property
+    def min_prio_idx(self):
+        return self.data["prio"][self.data["prio"].nonzero()].argmin()
+
+    @property
+    def reward_sum(self):
+        return (self.data['reward'] > 0).sum()
+
+    @property
+    def is_full(self):
+        return self.capacity == self.size
