@@ -1,7 +1,7 @@
 import torch as T
 from tqdm import tqdm
 
-from Environment.Game import Game
+from Environment import Game
 from Learner.Agents import RandomAgent, QAgent
 from Learner.Nets import GameNet
 from Learner.Train import Trainer
@@ -12,8 +12,8 @@ N_PLAYERS = 2
 
 REWARD_MIN_FOR_Q = 3
 
-# device = 'cuda' if T.cuda.is_available() else 'cpu'
-device = 'cpu'
+device = 'cuda' if T.cuda.is_available() else 'cpu'
+# device = 'cpu'
 
 game = Game(
     n_players=N_PLAYERS,
@@ -47,7 +47,7 @@ trainer = Trainer(
 try:
     q_net.load()
 except:
-    pass
+    print('Weights not loaded - starting fresh')
 target_net.clone_state(q_net)
 q_net = q_net.to(device)
 target_net = target_net.to(device)
@@ -103,7 +103,7 @@ for i in iterator:
             game.set_agents(random_vs_random)
         game.reset()
 
-    mask = beat_time != 0
+    mask = T.tensor(beat_time != 0)
     avg_beat_time = (beat_time * mask).sum(dim=0) / mask.sum(dim=0)
     iterator.set_postfix_str(
         f"Ep: {game.episode}-{int(game.turn)}, "

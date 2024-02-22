@@ -2,11 +2,9 @@ import torch as T
 import torch.nn as nn
 import torch.nn.functional as F
 
-from Learner.Utils import preprocess_adj
-
 
 class MLP(nn.Module):
-    def __init__(self, in_features: int, out_features: int, final: bool=False, feature_dim: int = -1) -> None:
+    def __init__(self, in_features: int, out_features: int, final: bool = False, feature_dim: int = -1) -> None:
         super(MLP, self).__init__()
         self.final = final
         assert feature_dim in [-1, 1]
@@ -89,7 +87,7 @@ class PowerfulLayer(nn.Module):
         out = T.cat((out.permute(0, 2, 3, 1), matrix), dim=3)  # batch, N, N, out_feat
         del matrix
 
-        out = self.g1(out) # .permute(0, 3, 1, 2)
+        out = self.g1(out)  # .permute(0, 3, 1, 2)
 
         # Reshape and Norm
         # out = (adj_norm @ out).permute(0, 2, 3, 1)

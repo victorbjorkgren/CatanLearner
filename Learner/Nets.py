@@ -1,8 +1,11 @@
+from typing import Tuple
+
 import torch
 import torch as T
 import torch.nn as nn
 import torch_geometric as pyg
 
+from Environment import Game
 from .Utils import extract_attr, sparse_face_matrix, preprocess_adj, sparse_misc_node
 from .Layers import MLP, PowerfulLayer, MultiHeadAttention
 
@@ -43,7 +46,7 @@ class PlayerNet(nn.Module):
 
 
 def nn_sum(tensor: T.Tensor) -> T.Tensor:
-    return tensor.permute(0,3,1,2).sum(-2, keepdims=True).sum(-1, keepdims=True).permute(0,2,3,1)
+    return tensor.permute(0, 3, 1, 2).sum(dim=-2, keepdim=True).sum(-1, keepdim=True).permute(0, 2, 3, 1)
 
 
 class GameNet(nn.Module):
@@ -166,34 +169,6 @@ class GameNet(nn.Module):
 
         return obs_matrix
 
-    def duel_head(self, obs_matrix):
-        batch = obs_matrix.shape[0]
-        f = obs_matrix.shape[-1]
-        # action_matrix = (self.out_matrix.clone()
-        #                  .repeat((batch, 1, 1, 1))
-        #                  .reshape((batch, self.n_output, -1))
-        #                  .permute(0, 2, 1))
-        # state_matrix = action_matrix.clone()
-
-        # out_mask = self.action_mask.unsqueeze(-1).repeat(batch, 1, 1, self.n_output)
-        # obs_matrix = obs_matrix.permute(0, 3, 1, 2).reshape((batch, f, -1))
-
-        # embed_f = obs_matrix[:, :, self.action_mask].permute(0, 2, 1)
-
-        # action_matrix[:, self.action_mask, :] = self.action_value(embed_f)
-        # state_matrix[:, self.action_mask, :] = self.state_value(embed_f)
-
-        # action_matrix = (action_matrix
-        #                  .permute(0, 2, 1)
-        #                  .reshape((batch, 74, 74, self.n_output)))
-        # state_matrix = (state_matrix
-        #                 .permute(0, 2, 1)
-        #                 .reshape((batch, 74, 74, self.n_output)))
-
-        # action_matrix[out_mask] = self.action_value(obs_matrix[in_mask])
-
-        return action_matrix, state_matrix
-
     def clone_state(self, other):
         self.load_state_dict(other.state_dict())
 
@@ -203,7 +178,7 @@ class GameNet(nn.Module):
     def load(self):
         self.load_state_dict(torch.load(f'./q_net_state.pth'))
 
-    def get_dense(self, game):
+    def get_dense(self, game: Game) -> Tuple[T.Tensor, int]:
         node_x, edge_x, face_x = extract_attr(game)
 
         # Normalize-ish

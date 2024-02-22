@@ -3,7 +3,7 @@ import torch as T
 import torch_geometric as pyg
 
 import Learner.Nets
-# from Environment.Game import Game
+from Environment import Game
 
 from Learner.Utils import get_masks
 
@@ -12,13 +12,13 @@ class BaseAgent:
     def __init__(self):
         pass
 
-    def sample_action(self, game, state, i_am_player: int):
+    def sample_action(self, game: Game, state: T.Tensor, i_am_player: int) -> tuple[T.Tensor, T.Tensor]:
         pass
 
-    def sample_village(self, game, village_mask, i_am_player):
+    def sample_village(self, game: Game, village_mask: T.Tensor, i_am_player: int):
         pass
 
-    def sample_road(self, game, road_mask, i_am_player):
+    def sample_road(self, game: Game, road_mask: T.Tensor, i_am_player: int):
         pass
 
     def __repr__(self):
@@ -160,34 +160,6 @@ class QAgent(BaseAgent):
             return T.tensor((2, build_action[0])), build_action
         else:
             Exception("Invalid Build Action in QAgent")
-
-    # def sample_village(self, game, village_mask, i_am_player):
-    #     mask = self.mask_to_dense(self.empty_edge, village_mask)
-    #     with T.no_grad():
-    #         state = self.state_conv.get_dense(game)
-    #         q = self.q_net(state).detach()
-    #     q = q[0, :54, :54, i_am_player]
-    #     q[~mask] = -T.inf
-    #     q = q[T.eye(q.shape[-1]).bool()]
-    #     return q.argmax()
-    #
-    # def sample_road(self, game, road_mask, i_am_player):
-    #     build_q: T.Tensor
-    #
-    #     mask = self.mask_to_dense(road_mask, self.empty_node)[0]
-    #     with T.no_grad():
-    #         state = self.state_conv.get_dense(game)
-    #         q = self.q_net(state).detach()
-    #     q = q[0, :54, :54, i_am_player]
-    #     q[~mask] = -T.inf
-    #     build_q = q.max()
-    #     build_action = T.argwhere(q == build_q).T
-    #     build_action = build_action[:, 0]
-    #     bool_hit = (
-    #             (game.board.state.edge_index[0] == build_action[0])
-    #             & (game.board.state.edge_index[1] == build_action[1])
-    #     )
-    #     return T.where(bool_hit)[0]
 
     def mask_to_dense(self, road_mask, village_mask):
         village_mask = T.diag_embed(village_mask).bool()

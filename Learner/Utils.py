@@ -1,7 +1,9 @@
 import torch as T
 
+from Environment import Game
 
-def extract_attr(game):
+
+def extract_attr(game: Game):
     node_x = game.board.state.x.clone()
     edge_x = game.board.state.edge_attr.clone()
     face_x = game.board.state.face_attr.clone()
@@ -34,12 +36,15 @@ def sparse_misc_node(node_n, misc_n):
     return sparse
 
 
-def preprocess_adj(adj, batch_size):
-    I = T.eye(adj.size(1)).to(adj.device)
-    A_hat = adj[0] + I
-    D_hat_diag = T.sum(A_hat, dim=1).pow(-0.5)
-    D_hat = T.diag(D_hat_diag)
-    adj_normalized = T.mm(T.mm(D_hat, A_hat), D_hat)
+def preprocess_adj(adj, batch_size, add_self_loops):
+    if add_self_loops:
+        i = T.eye(adj.size(1)).to(adj.device)
+        a_hat = adj[0] + i
+    else:
+        a_hat = adj[0]
+    d_hat_diag = T.sum(a_hat, dim=1).pow(-0.5)
+    d_hat = T.diag(d_hat_diag)
+    adj_normalized = T.mm(T.mm(d_hat, a_hat), d_hat)
     return adj_normalized.repeat((batch_size, 1, 1))
 
 
