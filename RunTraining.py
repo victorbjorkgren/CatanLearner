@@ -42,7 +42,7 @@ trainer = Trainer(
     q_net=q_net,
     target_net=target_net,
     batch_size=64,
-    dry_run=128,
+    dry_run=1024,
     reward_min=REWARD_MIN_FOR_Q,
     gamma=.9,
 )
@@ -92,7 +92,7 @@ for i in iterator:
 
     # Should not trigger
     if not succeeded:
-        print(f'Invalid action {raw_action.tolist()} by player {game.current_player}')
+        print(f'Invalid action {raw_action.tolist()} by player {obs_player}')
         raw_action = T.tensor((73, 73))
 
     # Training tick
