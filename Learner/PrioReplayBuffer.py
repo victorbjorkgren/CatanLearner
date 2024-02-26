@@ -1,5 +1,6 @@
 import numpy as np
 import torch as T
+import pickle
 
 
 def assert_capacity(n):
@@ -8,73 +9,138 @@ def assert_capacity(n):
 
 
 class PrioReplayBuffer:
-    def __init__(self, capacity, alpha, beta):
+    _capacity: int
+    _alpha: float
+    _beta: float
+    _max_priority: float
+    _size: int
+    data: dict
+    _next_idx: int
+
+    def __init__(self, capacity: int, alpha: float, beta: float, save_interval: int = 1000):
         assert_capacity(capacity)
 
-        self.capacity = capacity
-        self.alpha = alpha
-        self.beta = beta
+        if self.load():
+            return
 
-        # self.priority_sum = [0] * (2 * capacity)
-        # self.priority_min = [float('inf')] * (2 * capacity)
+        self._capacity = capacity
+        self._alpha = alpha
+        self._beta = beta
 
-        self.max_priority = 1.
+        self._save_interval = save_interval
+        self._save_countdown = save_interval
+
+        self._max_priority = 1.
+        self._sum_priority = 0.
 
         # TODO: Make board size and n_player invariant
         # TODO: Fix Magic Numbers
         self.data = {
             'state': T.zeros((capacity, 74, 74, 14)),
+            'state_mask': T.zeros((capacity, 74, 74, 1), dtype=T.bool),
             'action': T.zeros((capacity, 2), dtype=T.long),
-            'new_state': T.zeros((capacity, 74, 74, 14)),
             'reward': T.zeros((capacity, 2)),
             'done': T.zeros((capacity,)),
-            'player': T.zeros((capacity,), dtype=T.long),
+            'episode': T.zeros((capacity,)),
+            'episode_tick': T.zeros((capacity,)),
             'prio': np.zeros((capacity,))
         }
 
-        self.next_idx = 0
-        self.size = 0
+        # self._buffer = {}
+        # self._req_data_keys = set(self._data.keys())
+        # self._req_data_keys.remove('prio')
 
-    def add(self, state, action, new_state, reward, done, i_am_player):
+        self._next_idx = 0
+        self._size = 0
+
+    def add(self, state, state_mask, action, reward, done, episode):
         if self.is_full:
             idx = self.min_prio_idx
         else:
-            idx = self.next_idx
-            self.next_idx = (idx + 1) % self.capacity
+            idx = self._next_idx
+            self._next_idx = (idx + 1) % self._capacity
 
         # TODO: Find root cause of this issue
         if len(action.shape) > 1:
             action = action.squeeze()
 
         self.data['state'][idx] = state
+        self.data['state_mask'][idx] = state_mask
         self.data['action'][idx] = action.long()
-        self.data['new_state'][idx] = new_state
         self.data['reward'][idx] = reward
         self.data['done'][idx] = done
-        self.data['player'][idx] = i_am_player
-        self.data['prio'][idx] = self.max_priority ** self.alpha
+        self.data['episode'] = episode
+        self.data['prio'][idx] = self._max_priority ** self._alpha
 
-        self.size = min(self.capacity, self.size + 1)
+        self._size = min(self._capacity, self._size + 1)
 
     def sample(self, n):
         prob = self.data['prio'] / self.data['prio'].sum()
 
-        sample_inds = np.random.choice(self.capacity, n, p=prob)
+        sample_inds = np.random.choice(self._capacity, n, p=prob)
 
-        weights = (self.size * prob[sample_inds]) ** (-self.beta)
+        weights = (self._size * prob[sample_inds]) ** (-self._beta)
         weights /= weights.max()
 
         samples = {
             'inds': sample_inds,
             'weights': weights
         }
-        for k, v in self.data.items():
-            samples[k] = v[sample_inds]
+        # for k, v in self.data.items():
+        #     samples[k] = v[sample_inds]
 
         return samples
 
     def update_prio(self, ind: T.Tensor, prio: np.array):
-        self.data['prio'][ind] = prio.clip(max=self.max_priority)
+        clipped_prio = prio.clip(max=self._max_priority)
+        self._sum_priority += clipped_prio.sum() - self.data['prio'][ind].sum()
+        self.data['prio'][ind] = clipped_prio
+
+    # def add_to_buffer(self, key, value) -> bool:
+    #     """returns True if buffer was flushed"""
+    #     if key in self._buffer:
+    #         raise KeyError("Tried to overwrite buffer value")
+    #
+    #     self._buffer[key] = value
+    #
+    #     if self._req_data_keys.issubset(self._buffer.keys()):
+    #         self.flush_buffer()
+    #         return True
+    #     return False
+    #
+    # def flush_buffer(self):
+    #     self.add(
+    #         self._buffer['state'],
+    #         self._buffer['state_mask'],
+    #         self._buffer['action'],
+    #         self._buffer['new_state'],
+    #         self._buffer['new_state_mask'],
+    #         self._buffer['reward'],
+    #         self._buffer['done'],
+    #         # self._player
+    #     )
+    #     self._buffer.clear()
+
+    def save_test(self):
+        if self._save_countdown <= 0:
+            self.save()
+            self._save_countdown = self._save_interval
+        else:
+            self._save_countdown -= 1
+
+    def save(self):
+        with open('./ReplayBuffer/_buffer.pkl', 'wb') as f:
+            pickle.dump(self, f)
+
+    def load(self) -> bool:
+        try:
+            with open('./ReplayBuffer/_buffer.pkl', 'rb') as f:
+                temp_self = pickle.load(f)
+                self.__dict__.update(temp_self.__dict__)
+                return True
+        except FileNotFoundError:
+            print('No buffer found to load - init fresh buffer')
+            return False
 
     @property
     def min_prio_idx(self):
@@ -86,4 +152,17 @@ class PrioReplayBuffer:
 
     @property
     def is_full(self):
-        return self.capacity == self.size
+        return self._capacity == self._size
+
+    @property
+    def priority_sum(self) -> float:
+        return self._sum_priority
+
+    @property
+    def save_interval(self):
+        return self._save_interval
+
+    @save_interval.setter
+    def save_interval(self, new_val):
+        self._save_countdown = new_val
+        self._save_interval = new_val

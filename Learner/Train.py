@@ -28,7 +28,7 @@ class Trainer(PrioReplayBuffer):
         self.optimizer = optim.Adam(self.q_net.parameters(), lr=1e-4, weight_decay=1e-5)
 
     def train(self, tick, episode):
-        if self.size < max(self.batch_size, self.dry_run):
+        if self._size < max(self.batch_size, self.dry_run):
             return 0
         if self.reward_sum < self.reward_min:
             return 0
@@ -84,3 +84,7 @@ class Trainer(PrioReplayBuffer):
             self.target_net.clone_state(self.q_net)
 
         return td_error.mean().item()
+
+    def save(self):
+        super().save()
+        self.q_net.save()

@@ -1,5 +1,6 @@
 import torch as T
 from tqdm import tqdm
+import atexit
 
 from Environment import Game
 from Learner.Agents import RandomAgent, QAgent
@@ -52,6 +53,8 @@ target_net.clone_state(q_net)
 q_net = q_net.to(device)
 target_net = target_net.to(device)
 
+agent1 = RandomAgent()
+
 random_vs_random = [RandomAgent(), RandomAgent()]
 random_vs_q = [
     RandomAgent(),
@@ -80,7 +83,12 @@ loss_hist = T.zeros((HISTORY_DISPLAY,))
 iterator = tqdm(range(MAX_STEPS))
 for i in iterator:
     observation, obs_player = q_net.get_dense(game)
-    action, raw_action = game.current_agent.sample_action(game, observation, i_am_player=game.current_player)
+    action, raw_action = game.current_agent.sample_action(
+        game,
+        observation,
+        i_am_player=game.current_player,
+        remember=True
+    )
     reward, done, succeeded = game.step(action)
     new_observation, _ = q_net.get_dense(game)
 
