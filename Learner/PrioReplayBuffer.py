@@ -1,3 +1,5 @@
+import os
+
 import numpy as np
 import torch as T
 import pickle
@@ -76,10 +78,12 @@ class PrioReplayBuffer:
 
         self._size = min(self._capacity, self._size + 1)
 
+        self.save_test()
+
     def sample(self, n):
         prob = self.data['prio'] / self.data['prio'].sum()
 
-        sample_inds = np.random.choice(self._capacity, n, p=prob)
+        sample_inds = np.random.choice(self._capacity, n, p=prob, replace=False)
 
         weights = (self._size * prob[sample_inds]) ** (-self._beta)
         weights /= weights.max()
@@ -135,12 +139,13 @@ class PrioReplayBuffer:
             self._save_countdown -= 1
 
     def save(self):
-        with open('./ReplayBuffer/_buffer.pkl', 'wb') as f:
+        os.makedirs('./ReplayBuffer/', exist_ok=True)
+        with open(f'./ReplayBuffer/{self.__repr__()}_buffer.pkl', 'wb') as f:
             pickle.dump(self, f)
 
     def load(self) -> bool:
         try:
-            with open('./ReplayBuffer/_buffer.pkl', 'rb') as f:
+            with open(f'./ReplayBuffer/{self.__repr__()}_buffer.pkl', 'rb') as f:
                 temp_self = pickle.load(f)
                 self.__dict__.update(temp_self.__dict__)
                 return True
