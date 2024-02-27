@@ -22,8 +22,9 @@ class PrioReplayBuffer:
     def __init__(self, capacity: int, alpha: float, beta: float, save_interval: int = 1000) -> None:
         assert_capacity(capacity)
 
-        if self.load():
-            return
+        # TODO: Currently disabling loading replay buffer as it's setup changes so much. Reenable when possible.
+        # if self.load():
+        #     return
 
         self._capacity = capacity
         self._alpha = alpha
@@ -86,7 +87,7 @@ class PrioReplayBuffer:
         sample_inds = np.random.choice(self._capacity, n, p=prob, replace=False)
 
         weights = (self._size * prob[sample_inds]) ** (-self._beta)
-        weights /= weights.max()
+        weights = weights.clip(0, 1)
 
         samples = {
             'inds': sample_inds,

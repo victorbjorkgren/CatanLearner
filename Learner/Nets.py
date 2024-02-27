@@ -56,6 +56,7 @@ class GameNet(nn.Module):
                  n_output,
                  n_power_layers,
                  on_device,
+                 load_state,
                  batch_size=1,
                  undirected_faces=False,
                  ):
@@ -117,7 +118,7 @@ class GameNet(nn.Module):
 
         self.power_layers = [
 
-            PowerfulLayer(n_embed, n_embed, self.full_adj_norm).to(self.on_device)
+            PowerfulLayer(n_embed, n_embed, self.full_adj_norm.to(self.on_device)).to(self.on_device)
             for _ in range(n_power_layers)
 
         ]
@@ -125,6 +126,9 @@ class GameNet(nn.Module):
         self.state_matrix = self.state_matrix.to(self.on_device)
         self.full_mask = self.full_mask.to(self.on_device)
         self.out_matrix = self.out_matrix.to(self.on_device)
+
+        if load_state:
+            self.load()
 
     def forward(self, observation: T.Tensor) -> T.Tensor:
         observation = observation.to(self.on_device)

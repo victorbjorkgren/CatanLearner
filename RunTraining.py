@@ -1,3 +1,5 @@
+import os
+
 import torch as T
 from tqdm import tqdm
 import atexit
@@ -11,11 +13,17 @@ MAX_STEPS = 100_000_000
 HISTORY_DISPLAY = 100
 N_PLAYERS = 2
 
+DRY_RUN = 0
+BATCH_SIZE = 64
+
 REPLAY_MEMORY_SIZE = 2 ** 13  # 8192
 REPLAY_ALPHA = .7
-REPLAY_BETA = .9
+REPLAY_BETA = .8
 
 REWARD_MIN_FOR_Q = 3
+
+LOAD_Q_NET = True
+LOAD_BUFFER = False
 
 device = 'cuda' if T.cuda.is_available() else 'cpu'
 # device = 'cpu'
@@ -29,27 +37,25 @@ q_net = GameNet(
     n_power_layers=4,
     n_embed=16,
     n_output=N_PLAYERS,
-    on_device=device
+    on_device=device,
+    load_state=LOAD_Q_NET
 )
 target_net = GameNet(
     game=game,
     n_power_layers=4,
     n_embed=16,
     n_output=N_PLAYERS,
-    on_device=device
+    on_device=device,
+    load_state=LOAD_Q_NET
 )
 trainer = Trainer(
     q_net=q_net,
     target_net=target_net,
-    batch_size=64,
-    dry_run=1024,
+    batch_size=BATCH_SIZE,
+    dry_run=DRY_RUN,
     reward_min=REWARD_MIN_FOR_Q,
     gamma=.9,
 )
-try:
-    q_net.load()
-except:
-    print('Weights not loaded - starting fresh')
 target_net.clone_state(q_net)
 q_net = q_net.to(device)
 target_net = target_net.to(device)
@@ -75,6 +81,7 @@ trainer.register_agents([random_agent, q_agent])
 game.register_agents(random_vs_q)
 game.reset()
 
+td_loss, rule_loss = 0, 0
 reward_history = T.zeros((HISTORY_DISPLAY, 2))
 beat_time = T.zeros((HISTORY_DISPLAY, 2))
 td_loss_hist = T.zeros((HISTORY_DISPLAY,))
@@ -96,7 +103,8 @@ for i in iterator:
         raw_action = T.tensor((73, 73))
 
     # Training tick
-    td_loss, rule_loss = trainer.train()
+    if reward_history.sum() > 0:
+        td_loss, rule_loss = trainer.train()
 
     # Update trackers
     reward_history[game.episode % reward_history.shape[0], :] = reward.clamp_min(0)
