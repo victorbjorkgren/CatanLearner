@@ -6,7 +6,7 @@ import torch.nn as nn
 import torch_geometric as pyg
 
 from Environment import Game
-from .Utils import extract_attr, sparse_face_matrix, preprocess_adj, sparse_misc_node
+from .Utils import extract_attr, sparse_face_matrix, preprocess_adj, sparse_misc_node, get_masks
 from .Layers import MLP, PowerfulLayer, MultiHeadAttention
 
 
@@ -76,7 +76,7 @@ class GameNet(nn.Module):
         self.undirected_faces = undirected_faces
         self.sparse_edge = sparse_edge
         self.sparse_face = sparse_face_matrix(sparse_face, to_undirected=self.undirected_faces)
-        self.sparse_pass_node = sparse_misc_node(sparse_edge.max(), self.sparse_face.max() + 1)
+        self.sparse_pass_node = sparse_misc_node(sparse_edge.max(), self.sparse_face.max() + 1, to_undirected=True)
         self.sparse_full = T.cat((self.sparse_edge, self.sparse_face, self.sparse_pass_node), dim=1)
 
         # TODO: Fix Magic Numbers
@@ -109,8 +109,8 @@ class GameNet(nn.Module):
         self.edge_adj_norm = preprocess_adj(self.edge_adj, batch_size, add_self_loops=False)
         self.full_adj_norm = preprocess_adj(self.full_adj, batch_size, add_self_loops=False)
 
-        self.node_embed = MLP(n_node_attr + n_players * n_player_attr, n_embed)
-        self.edge_embed = MLP(n_edge_attr + n_players * n_player_attr, n_embed)
+        self.node_embed = MLP(n_node_attr + n_players * n_player_attr + 2, n_embed)
+        self.edge_embed = MLP(n_edge_attr + n_players * n_player_attr + 2, n_embed)
         self.face_embed = MLP(n_face_attr, n_embed)
 
         self.action_value = MLP(n_embed, n_output, final=True)
@@ -147,6 +147,7 @@ class GameNet(nn.Module):
         mean_action = nn_sum(action_matrix) / nn_sum(mask)
 
         q_matrix = action_matrix + (state_matrix - mean_action)
+        q_matrix[mask] = -T.inf
         return q_matrix
 
     def feature_embedding(self, observation):
@@ -169,7 +170,7 @@ class GameNet(nn.Module):
 
         obs_matrix = (obs_matrix
                       .permute(0, 2, 1)
-                      .reshape((batch, 74, 74, 16)))
+                      .reshape((batch, 74, 74, self.n_embed)))
 
         return obs_matrix
 
@@ -184,6 +185,12 @@ class GameNet(nn.Module):
 
     def get_dense(self, game: Game) -> Tuple[T.Tensor, int]:
         node_x, edge_x, face_x = extract_attr(game)
+        p0_mask = self.mask_util(game, 0).squeeze()
+        p1_mask = self.mask_util(game, 1).squeeze()
+        p_mask = T.stack((p0_mask, p1_mask), dim=-1).unsqueeze(0)
+        mask = T.zeros(1, 74, 74, 2)
+        mask[:,:54,:54,:] = p_mask
+        mask[:, -1, -1, :] = True
 
         # Normalize-ish
         node_x /= 10
@@ -198,8 +205,26 @@ class GameNet(nn.Module):
         face_x = face_x.repeat_interleave(6, 0)
         if self.undirected_faces:
             face_x = T.cat((face_x, face_x.flip(0)), dim=0)
-        connection_x = T.cat((edge_x, face_x, pass_x))
+        connection_x = T.cat((edge_x, face_x, pass_x, pass_x))
         connection_matrix = pyg.utils.to_dense_adj(self.sparse_full, edge_attr=connection_x)
 
         full_matrix = node_matrix + connection_matrix
+        full_matrix = T.cat((full_matrix, mask), dim=-1)
         return full_matrix, game.current_player
+
+    def mask_util(self, game: Game, player) -> T.Tensor:
+        road_mask, village_mask = get_masks(game, player)
+
+        if game.first_turn:
+            if game.first_turn_village_switch:
+                road_mask = T.zeros((self.sparse_edge.shape[1],), dtype=T.bool)
+            else:
+                village_mask = T.zeros((54,), dtype=T.bool)
+
+        village_mask = T.diag_embed(village_mask).bool()
+        if road_mask.sum() == 0:
+            road_mask = T.zeros_like(village_mask, dtype=T.bool)
+        else:
+            road_mask = pyg.utils.to_dense_adj(self.sparse_edge[:, road_mask],
+                                               max_num_nodes=village_mask.shape[-1]).bool()
+        return village_mask + road_mask

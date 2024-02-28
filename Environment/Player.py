@@ -10,7 +10,7 @@ from Learner.Agents import BaseAgent
 # [Bricks, Grains, Ores, Lumbers, Wools]
 #
 class Player:
-    def __init__(self, agent: BaseAgent):
+    def __init__(self, agent: BaseAgent | None):
         self.hand = T.tensor([0, 0, 0, 0, 0])
         self.points = 0
         self.n_villages = 0

@@ -1,8 +1,7 @@
-import os
+from collections import deque
 
 import torch as T
 from tqdm import tqdm
-import atexit
 
 from Environment import Game
 from Learner.Agents import RandomAgent, QAgent
@@ -13,16 +12,16 @@ MAX_STEPS = 100_000_000
 HISTORY_DISPLAY = 100
 N_PLAYERS = 2
 
-DRY_RUN = 0
+DRY_RUN = 1024
 BATCH_SIZE = 64
 
 REPLAY_MEMORY_SIZE = 2 ** 13  # 8192
 REPLAY_ALPHA = .7
 REPLAY_BETA = .8
 
-REWARD_MIN_FOR_Q = 3
+REWARD_MIN_FOR_Q = 0
 
-LOAD_Q_NET = True
+LOAD_Q_NET = False
 LOAD_BUFFER = False
 
 device = 'cuda' if T.cuda.is_available() else 'cpu'
@@ -35,7 +34,7 @@ game = Game(
 q_net = GameNet(
     game=game,
     n_power_layers=4,
-    n_embed=16,
+    n_embed=32,
     n_output=N_PLAYERS,
     on_device=device,
     load_state=LOAD_Q_NET
@@ -43,7 +42,7 @@ q_net = GameNet(
 target_net = GameNet(
     game=game,
     n_power_layers=4,
-    n_embed=16,
+    n_embed=32,
     n_output=N_PLAYERS,
     on_device=device,
     load_state=LOAD_Q_NET
@@ -61,6 +60,7 @@ q_net = q_net.to(device)
 target_net = target_net.to(device)
 
 random_agent = RandomAgent(
+    game=game,
     capacity=REPLAY_MEMORY_SIZE,
     alpha=REPLAY_ALPHA,
     beta=REPLAY_BETA
@@ -73,19 +73,14 @@ q_agent = QAgent(
     beta=REPLAY_BETA
 )
 
-# random_vs_random = [random_agent, random_agent]
-random_vs_q = [random_agent, q_agent]
-# q_vs_q = [q_agent, q_agent]
-
-trainer.register_agents([random_agent, q_agent])
-game.register_agents(random_vs_q)
+agent_list = [q_agent, random_agent]
+trainer.register_agents(agent_list)
+game.register_agents(agent_list)
 game.reset()
 
 td_loss, rule_loss = 0, 0
-reward_history = T.zeros((HISTORY_DISPLAY, 2))
-beat_time = T.zeros((HISTORY_DISPLAY, 2))
-td_loss_hist = T.zeros((HISTORY_DISPLAY,))
-rule_loss_hist = T.zeros((HISTORY_DISPLAY,))
+td_loss_hist = deque(maxlen=HISTORY_DISPLAY)
+rule_loss_hist = deque(maxlen=HISTORY_DISPLAY)
 iterator = tqdm(range(MAX_STEPS))
 for i in iterator:
     observation, obs_player = q_net.get_dense(game)
@@ -96,36 +91,39 @@ for i in iterator:
         remember=True
     )
     reward, done, succeeded = game.step(action)
+    game.player_agents[obs_player].update_reward(reward, done)
 
     # Should not trigger
-    if not succeeded:
-        print(f'Invalid action {raw_action.tolist()} by player {obs_player}')
-        raw_action = T.tensor((73, 73))
+    # if not succeeded:
+        # print(f'Invalid action {raw_action.tolist()} by player {obs_player}')
+        # raw_action = T.tensor((73, 73))
 
     # Training tick
-    if reward_history.sum() > 0:
-        td_loss, rule_loss = trainer.train()
-
-    # Update trackers
-    reward_history[game.episode % reward_history.shape[0], :] = reward.clamp_min(0)
-    beat_time[game.episode % beat_time.shape[0], reward == 1] = game.turn
-    td_loss_hist[i % td_loss_hist.shape[0]] = td_loss
-    rule_loss_hist[i % rule_loss_hist.shape[0]] = rule_loss
+    td_loss = trainer.train()
+    td_loss_hist.append(td_loss)
 
     # On episode termination
     if done:
-        for ii in range(len(game.player_agents)):
-            game.player_agents[ii].update_reward(reward[ii])
+        if reward > 0:
+            final_reward = [-reward] * N_PLAYERS
+            final_reward[obs_player] = reward
+        else:
+            final_reward = [0] * N_PLAYERS
+        for ii in range(N_PLAYERS):
+            game.player_agents[ii].update_reward(final_reward[ii], done)
+            game.player_agents[ii].clear_cache()
         game.render(training_img=True)
-        q_net.save()
+        agent_list.reverse()
+        trainer.register_agents(agent_list)
+        game.register_agents(agent_list)
         game.reset()
+        q_net.save()
 
-    mask = T.tensor(beat_time != 0)
-    avg_beat_time = (beat_time * mask).sum(dim=0) / mask.sum(dim=0)
     iterator.set_postfix_str(
         f"Ep: {game.episode}-{int(game.turn)}, "
-        f"TD Loss: {td_loss_hist[td_loss_hist.nonzero()].mean().item():.3e} "
-        f"Rule Loss: {rule_loss_hist[rule_loss_hist.nonzero()].mean().item():.3e} "
-        f"WinHistory: {reward_history.sum(0).long().tolist()}, "
-        f"AvgBeatTime: {avg_beat_time.int().tolist()}, "
+        f"TD Loss: {sum(td_loss_hist) / HISTORY_DISPLAY:.3e}, "
+        f"RewHist: {[f'{agent.avg_reward:4f}' for agent in game.player_agents]}, "
+        f"WinHist: {[agent.sum_win for agent in game.player_agents]}, "
+        f"AvgBeatTime: {[agent.avg_beat_time for agent in game.player_agents]}, "
+        f"Players: {[agent for agent in game.player_agents]}"
     )

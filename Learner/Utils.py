@@ -1,3 +1,5 @@
+from typing import Tuple
+
 import torch as T
 
 from Environment import Game
@@ -30,9 +32,11 @@ def sparse_face_matrix(face_index, to_undirected):
     return connections
 
 
-def sparse_misc_node(node_n, misc_n):
+def sparse_misc_node(node_n, misc_n, to_undirected):
     node_range = T.arange(node_n + 1)
     sparse = T.stack((T.full_like(node_range, misc_n), node_range), dim=0)
+    if to_undirected:
+        sparse = T.cat((sparse, sparse.flip(0)), dim=1)
     return sparse
 
 
@@ -52,3 +56,7 @@ def get_masks(game, i_am_player):
     road_mask = game.board.get_road_mask(i_am_player, game.players[i_am_player].hand, game.first_turn)
     village_mask = game.board.get_village_mask(i_am_player, game.players[i_am_player].hand, game.first_turn)
     return road_mask, village_mask
+
+
+def get_cache_key(tensor: T.Tensor) -> Tuple:
+    return tuple(tensor.numpy().flatten())
