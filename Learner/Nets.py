@@ -58,7 +58,7 @@ class GameNet(nn.Module):
                  on_device,
                  load_state,
                  batch_size=1,
-                 undirected_faces=False,
+                 undirected_faces=True,
                  ):
         super(GameNet, self).__init__()
 
@@ -109,9 +109,9 @@ class GameNet(nn.Module):
         self.edge_adj_norm = preprocess_adj(self.edge_adj, batch_size, add_self_loops=False)
         self.full_adj_norm = preprocess_adj(self.full_adj, batch_size, add_self_loops=False)
 
-        self.node_embed = MLP(n_node_attr + n_players * n_player_attr + 2, n_embed)
-        self.edge_embed = MLP(n_edge_attr + n_players * n_player_attr + 2, n_embed)
-        self.face_embed = MLP(n_face_attr, n_embed)
+        self.node_embed = MLP(n_node_attr + n_players * n_player_attr + 2, n_embed, residual=False)
+        self.edge_embed = MLP(n_edge_attr + n_players * n_player_attr + 2, n_embed, residual=False)
+        self.face_embed = MLP(n_face_attr, n_embed, residual=False)
 
         self.action_value = MLP(n_embed, n_output, final=True)
         self.state_value = MLP(n_embed, n_output, final=True)
@@ -136,7 +136,7 @@ class GameNet(nn.Module):
 
         obs_matrix = self.feature_embedding(observation)
         for power_layer in self.power_layers:
-            obs_matrix = power_layer(obs_matrix)
+            obs_matrix = obs_matrix + power_layer(obs_matrix)
 
         action_matrix = self.action_value(obs_matrix)
         state_matrix = self.state_value(obs_matrix)
