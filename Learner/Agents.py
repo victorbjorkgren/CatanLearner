@@ -44,7 +44,7 @@ class BaseAgent(PrioReplayBuffer):
     @property
     def avg_reward(self) -> float:
         if len(self.reward_history) > 0:
-            return sum(self.reward_history) / len(self.reward_history)
+            return sum(self.reward_history) / (len(self.reward_history) - self.reward_history.count(0.))
         else:
             return 0.
 

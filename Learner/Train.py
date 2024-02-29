@@ -69,6 +69,9 @@ class Trainer():
         done = agent.data['done'][inds].bool().to(self.q_net.on_device)
         player = agent.data['player'][inds].to(self.q_net.on_device)
 
+        # REWARD "NORM"
+        reward = reward / 10.
+
         # TODO: Check Norm of samples
         q = self.q_net(state)[batch_range, :, :, player]
         # rule_breaking_q = self.get_rule_break_q(q.detach(), state_mask)

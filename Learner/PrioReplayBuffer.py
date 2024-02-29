@@ -40,7 +40,6 @@ class PrioReplayBuffer:
         # TODO: Fix Magic Numbers
         self.data = {
             'state': T.zeros((capacity, 74, 74, 16), dtype=T.float),
-            'state_mask': T.zeros((capacity, 74, 74, 1), dtype=T.bool),
             'action': T.zeros((capacity, 2), dtype=T.long),
             'reward': T.zeros((capacity,), dtype=T.float),
             'done': T.zeros((capacity,), dtype=T.bool),
@@ -49,7 +48,7 @@ class PrioReplayBuffer:
             'prio': np.zeros((capacity,), dtype=float)
         }
 
-        # self._buffer = {}
+        self._buffer = {}
         # self._req_data_keys = set(self._data.keys())
         # self._req_data_keys.remove('prio')
 
@@ -69,7 +68,6 @@ class PrioReplayBuffer:
             action = action.squeeze()
 
         self.data['state'][idx] = state
-        # self.data['state_mask'][idx, :54, :54, 0] = state_mask
         self.data['action'][idx] = action.long()
         self.data['reward'][idx] = reward
         self.data['done'][idx] = done
@@ -103,34 +101,35 @@ class PrioReplayBuffer:
         self.data['prio'][ind] = clipped_prio
         self._sum_priority = self.data['prio'].sum()
 
-    def update_reward(self, reward: float, done: bool) -> None:
-        self.data['reward'][self._next_idx - 1] = reward
+    def update_reward(self, reward: float | None, done: bool) -> None:
+        if reward is not None:
+            self.data['reward'][self._next_idx - 1] = reward
         self.data['done'][self._next_idx - 1] = done
 
-    # def add_to_buffer(self, key, value) -> bool:
-    #     """returns True if buffer was flushed"""
-    #     if key in self._buffer:
-    #         raise KeyError("Tried to overwrite buffer value")
-    #
-    #     self._buffer[key] = value
-    #
-    #     if self._req_data_keys.issubset(self._buffer.keys()):
-    #         self.flush_buffer()
-    #         return True
-    #     return False
-    #
-    # def flush_buffer(self):
-    #     self.add(
-    #         self._buffer['state'],
-    #         self._buffer['state_mask'],
-    #         self._buffer['action'],
-    #         self._buffer['new_state'],
-    #         self._buffer['new_state_mask'],
-    #         self._buffer['reward'],
-    #         self._buffer['done'],
-    #         # self._player
-    #     )
-    #     self._buffer.clear()
+    def add_to_buffer(self, key, value) -> bool:
+        """returns True if buffer was flushed"""
+        if key in self._buffer:
+            raise KeyError("Tried to overwrite buffer value")
+
+        self._buffer[key] = value
+
+        if self._req_data_keys.issubset(self._buffer.keys()):
+            self.flush_buffer()
+            return True
+        return False
+
+    def flush_buffer(self):
+        self.add(
+            self._buffer['state'],
+            self._buffer['state_mask'],
+            self._buffer['action'],
+            self._buffer['new_state'],
+            self._buffer['new_state_mask'],
+            self._buffer['reward'],
+            self._buffer['done'],
+            # self._player
+        )
+        self._buffer.clear()
 
     def save_test(self):
         if self._save_countdown <= 0:
