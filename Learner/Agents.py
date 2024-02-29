@@ -36,15 +36,18 @@ class BaseAgent(PrioReplayBuffer):
 
     def update_reward(self, reward: float, done: bool) -> None:
         super().update_reward(reward, done)
-        self.reward_history.append(reward)
-        if done & (reward > 0.):
-            self.win_history.append(1)
-            self.beat_time.append(self.game.turn)
+        if reward is not None:
+            self.reward_history.append(reward)
+            if done & (reward > 0.):
+                self.win_history.append(1)
+                self.beat_time.append(self.game.turn)
 
     @property
     def avg_reward(self) -> float:
         if len(self.reward_history) > 0:
-            return sum(self.reward_history) / (len(self.reward_history) - self.reward_history.count(0.))
+            n = len(self.reward_history) - self.reward_history.count(0.)
+            n = max(1, n)
+            return sum(self.reward_history) / n
         else:
             return 0.
 
