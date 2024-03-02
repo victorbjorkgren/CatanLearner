@@ -4,6 +4,8 @@ import numpy as np
 import torch as T
 import pickle
 
+from Learner.Utils import TensorDeque
+
 
 def assert_capacity(n):
     # Check that n is an integer greater than 0 and n & (n - 1) == 0
@@ -19,10 +21,16 @@ class PrioReplayBuffer:
     data: dict
     _next_idx: int
 
-    def __init__(self, capacity: int, alpha: float, beta: float, save_interval: int = 1000) -> None:
+    def __init__(self,
+                 capacity: int,
+                 max_seq_len: int,
+                 alpha: float,
+                 beta: float,
+                 save_interval: int = 1000
+                 ) -> None:
         assert_capacity(capacity)
 
-        # TODO: Currently disabling loading replay buffer as it's setup changes so much. Reenable when possible.
+        # TODO: Currently disabling loading replay buffer as it's setup changes so much. Re-enable when possible.
         # if self.load():
         #     return
 
@@ -39,9 +47,12 @@ class PrioReplayBuffer:
         # TODO: Make board size and n_player invariant
         # TODO: Fix Magic Numbers
         self.data = {
-            'state': T.zeros((capacity, 74, 74, 16), dtype=T.float),
-            'action': T.zeros((capacity, 2), dtype=T.long),
-            'reward': T.zeros((capacity,), dtype=T.float),
+            'state': T.zeros((capacity, max_seq_len, 74, 74, 16), dtype=T.float),
+            'seq_len': T.zeros((capacity,), dtype=T.long),
+            'action': T.zeros((capacity, max_seq_len, 2), dtype=T.long),
+            'reward': T.zeros((capacity, max_seq_len), dtype=T.float),
+            'lstm_state': T.zeros((capacity, max_seq_len, 32), dtype=T.float),
+            'lstm_cell': T.zeros((capacity, max_seq_len, 32), dtype=T.float),
             'done': T.zeros((capacity,), dtype=T.bool),
             'episode': T.zeros((capacity,), dtype=T.long),
             'player': T.zeros((capacity,), dtype=T.long),
@@ -49,27 +60,47 @@ class PrioReplayBuffer:
         }
 
         self._buffer = {}
-        # self._req_data_keys = set(self._data.keys())
-        # self._req_data_keys.remove('prio')
+        self._req_data_keys = set(self.data.keys())
+        self._req_data_keys.remove('prio')
 
         self._next_idx = 0
         self._size = 0
 
-    def add(self, state, action, reward, done, episode, player) -> None:
-        # if self.is_full:
-        #     idx = self.min_prio_idx
-        # else:
+    def add(self,
+            state: TensorDeque,
+            action: TensorDeque,
+            reward: TensorDeque,
+            lstm_state: TensorDeque,
+            lstm_cell: TensorDeque,
+            done: bool,
+            episode: int,
+            player: int
+            ) -> None:
 
-        idx = self._next_idx
-        self._next_idx = (idx + 1) % self._capacity
+        if self.is_full:
+            idx = self.min_prio_idx
+        else:
+            idx = self._next_idx
+            self._next_idx = (idx + 1) % self._capacity
 
-        # TODO: Find root cause of this issue
-        if len(action.shape) > 1:
-            action = action.squeeze()
+        state = state.to_tensor()
+        action = action.to_tensor()
+        reward = reward.to_tensor()
+        lstm_state = lstm_state.to_tensor()
+        lstm_cell = lstm_cell.to_tensor()
 
-        self.data['state'][idx] = state
-        self.data['action'][idx] = action.long()
-        self.data['reward'][idx] = reward
+        state = state.squeeze()
+        action = action.long()
+        reward = reward.squeeze()
+        lstm_state = lstm_state[:-1, 0, 0, :]
+        lstm_cell = lstm_cell[:-1, 0, 0, :]
+
+        self.data['state'][idx, :len(state)] = state
+        self.data['action'][idx, :len(action)] = action
+        self.data['reward'][idx, :len(reward)] = reward
+        self.data['lstm_state'][idx, :len(lstm_state)] = lstm_state
+        self.data['lstm_cell'][idx, :len(lstm_cell)] = lstm_cell
+        self.data['seq_len'][idx] = len(state)
         self.data['done'][idx] = done
         self.data['episode'][idx] = episode
         self.data['player'][idx] = player
@@ -77,7 +108,7 @@ class PrioReplayBuffer:
 
         self._size = min(self._capacity, self._size + 1)
 
-        self.save_test()
+        # self.save_test()
 
     def sample(self, n):
         prob = self.data['prio'] / self.data['prio'].sum()
@@ -101,35 +132,35 @@ class PrioReplayBuffer:
         self.data['prio'][ind] = clipped_prio
         self._sum_priority = self.data['prio'].sum()
 
-    def update_reward(self, reward: float | None, done: bool) -> None:
-        if reward is not None:
-            self.data['reward'][self._next_idx - 1] = reward
-        self.data['done'][self._next_idx - 1] = done
+    # def update_reward(self, reward: float | None) -> None:
+    #     if reward is not None:
+    #         self.data['reward'][self._next_idx - 1] = reward
+    #     self.data['done'][self._next_idx - 1] = done
 
-    def add_to_buffer(self, key, value) -> bool:
-        """returns True if buffer was flushed"""
-        if key in self._buffer:
-            raise KeyError("Tried to overwrite buffer value")
-
-        self._buffer[key] = value
-
-        if self._req_data_keys.issubset(self._buffer.keys()):
-            self.flush_buffer()
-            return True
-        return False
-
-    def flush_buffer(self):
-        self.add(
-            self._buffer['state'],
-            self._buffer['state_mask'],
-            self._buffer['action'],
-            self._buffer['new_state'],
-            self._buffer['new_state_mask'],
-            self._buffer['reward'],
-            self._buffer['done'],
-            # self._player
-        )
-        self._buffer.clear()
+    # def add_to_buffer(self, key, value) -> bool:
+    #     """returns True if buffer was flushed"""
+    #     if key in self._buffer:
+    #         raise KeyError("Tried to overwrite buffer value")
+    #
+    #     self._buffer[key] = value
+    #
+    #     if self._req_data_keys.issubset(self._buffer.keys()):
+    #         self.flush_buffer()
+    #         return True
+    #     return False
+    #
+    # def flush_buffer_state(self):
+    #     self.add(
+    #         self._buffer['state'],
+    #         self._buffer['state_mask'],
+    #         self._buffer['action'],
+    #         self._buffer['new_state'],
+    #         self._buffer['new_state_mask'],
+    #         self._buffer['reward'],
+    #         self._buffer['done'],
+    #         # self._player
+    #     )
+    #     self._buffer.clear()
 
     def save_test(self):
         if self._save_countdown <= 0:

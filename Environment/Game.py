@@ -1,6 +1,6 @@
 import os
 import random
-from typing import Any, Tuple
+from typing import Any, Tuple, Optional, List
 
 import matplotlib.pyplot as plt
 import networkx as nx
@@ -21,13 +21,13 @@ class Game:
         self.max_turns = max_turns
         self.episode = start_episode
 
-        self.first_turn_village_switch = None
-        self.first_turn = None
-        self.current_player = None
-        self.player_agents = None
-        self.board = None
-        self.turn = None
-        self.idle_turns = None
+        self.player_agents: Optional[List[BaseAgent]] = None
+        self.first_turn_village_switch: Optional[bool] = None
+        self.first_turn: Optional[bool] = None
+        self.current_player: Optional[int] = None
+        self.board: Optional[Board] = None
+        self.turn: Optional[int] = None
+        self.idle_turns: Optional[int] = None
 
         # Placeholder inits
         self.board = Board(self.n_players)
@@ -88,16 +88,13 @@ class Game:
             self.idle_turns = 0
 
         if self.game_on():
-            return (not succeeded) * self.failed_action_penalty, False, succeeded
+            return (not succeeded) * self.failed_action_penalty + reward, False, succeeded
         else:
-            # points = T.tensor([e.points for e in self.players])
             points = self.players[self.current_player].points
             winner = points >= 10
             if winner:
-                rewards = 1.
-            else:
-                rewards = 0.
-            return rewards, True, succeeded
+                self.player_agents[self.current_player].register_victory()
+            return reward, True, succeeded
 
     def first_turn_step(self, action) -> Tuple[bool, float]:
         reward = 0.
@@ -136,34 +133,34 @@ class Game:
         else:
             return False, reward
 
-    def take_first_turn(self):
-        for player in range(self.n_players):
-            self.build_free_village(player)
-            self.build_free_road(player)
-        for player in range(self.n_players):
-            self.build_free_village(player)
-            self.build_free_road(player)
+    # def take_first_turn(self):
+    #     for player in range(self.n_players):
+    #         self.build_free_village(player)
+    #         self.build_free_road(player)
+    #     for player in range(self.n_players):
+    #         self.build_free_village(player)
+    #         self.build_free_road(player)
+    #
+    #     # Give resources to all villages
+    #     face_hits = T.nonzero(self.board.state.face_attr)
+    #     for hit in face_hits:
+    #         self.give_resource(hit)
 
-        # Give resources to all villages
-        face_hits = T.nonzero(self.board.state.face_attr)
-        for hit in face_hits:
-            self.give_resource(hit)
-
-    def build_free_village(self, player):
-        village_built = False
-        while not village_built:
-            chosen_building = self.players[player].agent.sample_village(
-                self,
-                self.board.get_village_mask(player, self.players[player].hand, True),
-                player)
-            village_built = self.build_village(chosen_building, player, first_turn=True)
-
-    def build_free_road(self, player):
-        road_built = False
-        while not road_built:
-            chosen_road = self.players[player].agent.sample_road(
-                self, self.board.get_road_mask(player, self.players[player].hand, True), player)
-            road_built = self.build_road(chosen_road, player, first_turn=True)
+    # def build_free_village(self, player):
+    #     village_built = False
+    #     while not village_built:
+    #         chosen_building = self.players[player].agent._sample_village(
+    #             self,
+    #             self.board.get_village_mask(player, self.players[player].hand, True),
+    #             player)
+    #         village_built = self.build_village(chosen_building, player, first_turn=True)
+    #
+    # def build_free_road(self, player):
+    #     road_built = False
+    #     while not road_built:
+    #         chosen_road = self.players[player].agent._sample_road(
+    #             self, self.board.get_road_mask(player, self.players[player].hand, True), player)
+    #         road_built = self.build_road(chosen_road, player, first_turn=True)
 
     def game_on(self):
         for player in self.players:

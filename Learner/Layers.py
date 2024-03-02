@@ -61,53 +61,35 @@ class PowerfulLayer(nn.Module):
         super(PowerfulLayer, self).__init__()
         self.adj_norm = adj_norm.unsqueeze(-1)
         self.mask = adj_norm > 0
-        self.mask = self.mask.squeeze()
+        self.mask = self.mask.view(1, -1).squeeze()
 
         self.m1 = MLP(in_features, out_features, feature_dim=-1)
         self.m2 = MLP(in_features, out_features, feature_dim=-1)
-        # self.g1 = MLP(2 * in_features, out_features)
+        # self.g1 = MLP(2 * out_features, out_features)
 
     def forward(self, matrix: T.Tensor) -> T.Tensor:
         """
-        matrix shape = (B, N, N, features)
-        norm shape = (B, N, N)
+        matrix shape = (Batch, Seq, N, N, feat)
         """
-        # if matrix.device != self.adj_norm.device:
-        #     self.adj_norm = self.adj_norm.to(matrix.device)
+        b, s, n, _, f = matrix.shape
 
-        # matrix = matrix.permute(0, 3, 1, 2)  # batch, out_feat, N, N
-        # out1 = matrix.clone()
-        # out2 = matrix.clone()
-        #
-        # # Feature Embedding
-        # out1[:, :, self.mask] = self.m1(matrix[:, :, self.mask])
-        # out2[:, :, self.mask] = self.m2(matrix[:, :, self.mask])
+        matrix = matrix.view(b * s, n * n, f)
+        out1 = T.zeros_like(matrix)
+        out2 = T.zeros_like(matrix)
 
-        # adj_norm = norm(matrix)
-
-        out1 = self.m1(matrix).permute(0, 3, 1, 2)  # batch, out_feat, N, N
-        out2 = self.m2(matrix).permute(0, 3, 1, 2)  # batch, out_feat, N, N
-
-        out1 = out1 * self.mask
-        out2 = out2 * self.mask
+        # Feature Embedding
+        out1[:, self.mask] = self.m1(matrix[:, self.mask])
+        out2[:, self.mask] = self.m2(matrix[:, self.mask])
 
         # Message Propagation
+        matrix = matrix.reshape(b, s, n, n, f)
+        out1 = out1.reshape(b, s, n, n, f).permute(0, 1, 4, 2, 3)
+        out2 = out2.reshape(b, s, n, n, f).permute(0, 1, 4, 2, 3)
         out = out1 @ out2
-        # del out1, out2
-        #
-        # # Add Gated Residual
-        # out = T.cat((out.permute(0, 2, 3, 1), matrix), dim=3)  # batch, N, N, out_feat
-        # out = self.g1(out)
 
-        return out.permute(0, 2, 3, 1) + matrix
-
-        # # Return Gated Residual
-        # out = T.cat((out, matrix), dim=3)  # batch, N, N, out_feat
-        # del matrix
-        #
-        # out[self.mask] = self.gate(out[self.mask])
-        #
-        # return out
+        # Norm and Residual
+        out = self.adj_norm * out.permute(0, 1, 3, 4, 2)
+        return out + matrix
 
 
 class MultiHeadAttention(nn.Module):

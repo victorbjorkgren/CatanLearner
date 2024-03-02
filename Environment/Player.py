@@ -39,7 +39,7 @@ class Player:
                 self.hand[i] -= self.hand[i] // 2
 
     def sample_action(self, game, road_mask, village_mask, i_am_player):
-        return self.agent.sample_action(game, road_mask, village_mask, i_am_player)
+        return self.agent.sample_action(road_mask, village_mask)
 
     def __str__(self):
         # [Bricks, Grains, Ores, Lumbers, Wools]
