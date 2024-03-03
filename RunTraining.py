@@ -18,7 +18,7 @@ N_PLAYERS = 2
 
 # LEARNER
 REWARD_MIN_FOR_LEARNING = 0
-DRY_RUN = 256
+DRY_RUN = 1024
 BATCH_SIZE = 8
 GAMMA = .99
 
@@ -31,7 +31,7 @@ REPLAY_MEMORY_SIZE = 2 ** 10  # 1024
 REPLAY_ALPHA = .9
 REPLAY_BETA = .4
 
-LOAD_Q_NET = False
+LOAD_Q_NET = True
 LOAD_BUFFER = False
 
 device = 'cuda' if T.cuda.is_available() else 'cpu'

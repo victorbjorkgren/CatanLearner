@@ -184,9 +184,9 @@ class GameNet(nn.Module):
         packed_matrix, (hn, cn) = self.lstm(packed_matrix, (h_in, c_in))
         temporal_matrix, _ = pad_packed_sequence(packed_matrix, batch_first=True)
 
-        assert temporal_matrix.shape[1] == obs_matrix.shape[1], "LSTM Sequence Length Output mismatch"
+        # assert temporal_matrix.shape[1] == obs_matrix.shape[1], "LSTM Sequence Length Output mismatch"
 
-        obs_matrix = temporal_matrix[:, :, None, None, :] + obs_matrix
+        obs_matrix[:, :temporal_matrix.shape[1]] = temporal_matrix[:, :, None, None, :] + obs_matrix[:, :temporal_matrix.shape[1]]
 
         return obs_matrix, hn, cn
 

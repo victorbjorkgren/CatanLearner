@@ -111,9 +111,9 @@ class BaseAgent(PrioReplayBuffer):
     def avg_reward(self) -> float:
         if len(self.reward_seq) > 0:
             reward_history = self.reward_seq.to_tensor()
-            n = (reward_history > 0).sum().item()
-            n = max(1, n)
-            return reward_history.sum().item() / n
+            # n = (reward_history > 0).sum().item()
+            # n = max(1, n)
+            return reward_history.sum().item()  # / n
         else:
             return 0.
 
