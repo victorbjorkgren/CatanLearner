@@ -35,6 +35,7 @@ class BaseAgent(PrioReplayBuffer):
         self.lstm_state_seq = TensorDeque(max_len=max_seq_length, queue_like=T.zeros((1, 1, 32), dtype=T.float))
         self.lstm_cell_seq = TensorDeque(max_len=max_seq_length, queue_like=T.zeros((1, 1, 32), dtype=T.float))
 
+        self.has_won: bool = False
         self.episode_rewards = []
         self.house_history = deque(maxlen=history_display)
         self.win_history = deque(maxlen=history_display)
@@ -53,6 +54,13 @@ class BaseAgent(PrioReplayBuffer):
 
     def signal_episode_done(self, i_am_player: int) -> None:
         self.flush_buffer(True, i_am_player, force=True)
+
+        if self.has_won:
+            self.win_history.append(1)
+            self.beat_time.append(self.game.turn)
+        else:
+            self.win_history.append(0)
+        self.has_won = False
 
         self.state_seq.clear()
         self.action_seq.clear()
@@ -84,8 +92,7 @@ class BaseAgent(PrioReplayBuffer):
             self.flush_buffer(False, i_am_player, force=False)
 
     def register_victory(self) -> None:
-        self.win_history.append(1)
-        self.beat_time.append(self.game.turn)
+        self.has_won = True
 
     def _to_buffer(
             self,
