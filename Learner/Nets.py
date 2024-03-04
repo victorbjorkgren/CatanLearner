@@ -7,8 +7,8 @@ import torch_geometric as pyg
 from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 
 from Environment import Game
-from .Utils import extract_attr, sparse_face_matrix, preprocess_adj, sparse_misc_node, get_masks
-from .Layers import MLP, PowerfulLayer, MultiHeadAttention
+from Utils import extract_attr, sparse_face_matrix, preprocess_adj, sparse_misc_node
+from Layers import MLP, PowerfulLayer, MultiHeadAttention
 
 
 class PlayerNet(nn.Module):
@@ -184,9 +184,13 @@ class GameNet(nn.Module):
         packed_matrix, (hn, cn) = self.lstm(packed_matrix, (h_in, c_in))
         temporal_matrix, _ = pad_packed_sequence(packed_matrix, batch_first=True)
 
-        # assert temporal_matrix.shape[1] == obs_matrix.shape[1], "LSTM Sequence Length Output mismatch"
+        # Add temporal matrix to all elements of observation matrix
+        obs_matrix[:, :temporal_matrix.shape[1]] = (
 
-        obs_matrix[:, :temporal_matrix.shape[1]] = temporal_matrix[:, :, None, None, :] + obs_matrix[:, :temporal_matrix.shape[1]]
+                temporal_matrix[:, :, None, None, :]
+                + obs_matrix[:, :temporal_matrix.shape[1]]
+
+        )
 
         return obs_matrix, hn, cn
 
@@ -232,10 +236,11 @@ class GameNet(nn.Module):
         node_x, edge_x, face_x = extract_attr(game)
         p0_mask = self.mask_util(game, 0).squeeze()
         p1_mask = self.mask_util(game, 1).squeeze()
-        p_mask = T.stack((p0_mask, p1_mask), dim=-1).unsqueeze(0)
+        # p_mask = T.stack((p0_mask, p1_mask), dim=-1).unsqueeze(0)
         mask = T.zeros(1, 74, 74, 2)
-        mask[:, :54, :54, :] = p_mask
-        mask[:, -1, -1, :] = True
+        mask[:, p0_mask[0, :], p0_mask[1, :], 0] = 1
+        mask[:, p1_mask[0, :], p1_mask[1, :], 1] = 1
+        mask[:, -1, -1, :] = 1
 
         # Normalize-ish
         node_x /= 10
@@ -257,19 +262,25 @@ class GameNet(nn.Module):
         full_matrix = T.cat((full_matrix, mask), dim=-1)
         return full_matrix, game.current_player
 
-    def mask_util(self, game: Game, player) -> T.Tensor:
-        road_mask, village_mask = get_masks(game, player)
+    @staticmethod
+    def mask_util(game: Game, player) -> T.Tensor:
+        # road_mask, village_mask = get_dense_masks(game, player)
+        road_mask = game.board.sparse_road_mask(player, game.players[player].hand, game.first_turn)
+        village_mask = game.board.sparse_village_mask(player, game.players[player].hand, game.first_turn)
 
-        if game.first_turn:
-            if game.first_turn_village_switch:
-                road_mask = T.zeros((self.sparse_edge.shape[1],), dtype=T.bool)
-            else:
-                village_mask = T.zeros((54,), dtype=T.bool)
+        mask = T.cat((road_mask, village_mask.repeat(2, 1)), dim=1)
+        return mask
 
-        village_mask = T.diag_embed(village_mask).bool()
-        if road_mask.sum() == 0:
-            road_mask = T.zeros_like(village_mask, dtype=T.bool)
-        else:
-            road_mask = pyg.utils.to_dense_adj(self.sparse_edge[:, road_mask],
-                                               max_num_nodes=village_mask.shape[-1]).bool()
-        return village_mask + road_mask
+        # if game.first_turn:
+        #     if game.first_turn_village_switch:
+        #         road_mask = T.zeros((self.sparse_edge.shape[1],), dtype=T.bool)
+        #     else:
+        #         village_mask = T.zeros((54,), dtype=T.bool)
+        #
+        # village_mask = T.diag_embed(village_mask).bool()
+        # if road_mask.sum() == 0:
+        #     road_mask = T.zeros_like(village_mask, dtype=T.bool)
+        # else:
+        #     road_mask = pyg.utils.to_dense_adj(self.sparse_edge[:, road_mask],
+        #                                        max_num_nodes=village_mask.shape[-1]).bool()
+        # return village_mask + road_mask
