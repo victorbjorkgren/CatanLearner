@@ -190,6 +190,11 @@ class RandomAgent(BaseAgent):
         else:
             raise RuntimeError(f"Random Agent chose illegal action {action_type}")
 
+    # def update_reward(self, reward: float, done: bool, i_am_player: int):
+    #     if reward < 0:
+    #         breakpoint()
+    #     super().update_reward(reward, done, i_am_player)
+
     def clear_cache(self):
         pass
 
