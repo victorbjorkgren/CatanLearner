@@ -1,4 +1,7 @@
-from typing import Tuple, List
+import os
+import random
+from datetime import datetime
+from typing import Tuple, List, Optional
 
 import torch
 import torch as T
@@ -55,16 +58,18 @@ def nn_sum(tensor: T.Tensor, dims: List[int]) -> T.Tensor:
 
 class GameNet(nn.Module):
     def __init__(self,
-                 game,
-                 n_embed,
-                 n_output,
-                 n_power_layers,
-                 on_device,
-                 load_state,
+                 net_config,
                  batch_size=1,
                  undirected_faces=True,
                  ):
         super(GameNet, self).__init__()
+
+        game = net_config['game']
+        n_embed = net_config['n_embed']
+        n_output = net_config['n_output']
+        n_power_layers = net_config['n_power_layers']
+        on_device = net_config['on_device']
+        load_state = net_config['load_state']
 
         sparse_edge = game.board.state.edge_index.clone()
         sparse_face = game.board.state.face_index.clone()
@@ -138,7 +143,7 @@ class GameNet(nn.Module):
         self.out_matrix = self.out_matrix.to(self.on_device)
 
         if load_state:
-            self.load()
+            self.load('latest')
 
     def forward(self,
                 observation: T.Tensor,
@@ -226,17 +231,29 @@ class GameNet(nn.Module):
     def clone_state(self, other):
         self.load_state_dict(other.state_dict())
 
-    def save(self):
-        torch.save(self.state_dict(), f'./q_net_state.pth')
+    def save(self, suffix):
+        if suffix == 'latest':
+            torch.save(self.state_dict(), f'./Q_Agent_Titan.pth')
 
-    def load(self):
-        self.load_state_dict(torch.load(f'./q_net_state.pth'))
+            # Create BackUp
+            now = datetime.now()
+            now = now.strftime("%Y%m%d_%H%M%S")
+            os.makedirs('./NetBackup/', exist_ok=True)
+            torch.save(self.state_dict(), f'./NetBackup/q_net_state_{now}.pth')
+        else:
+            os.makedirs('./PastTitans/', exist_ok=True)
+            torch.save(self.state_dict(), f'./PastTitans/Q_Agent_{suffix}.pth')
+
+    def load(self, file: str | int):
+        if file == 'latest':
+            self.load_state_dict(torch.load(f'./Q_Agent_Titan.pth'))
+        else:
+            self.load_state_dict(torch.load(f'./PastTitans/{file}'))
 
     def get_dense(self, game: Game) -> Tuple[T.Tensor, int]:
         node_x, edge_x, face_x = self.extract_attr(game)
         p0_mask = self.mask_util(game, 0).long()  # .squeeze()
         p1_mask = self.mask_util(game, 1).long()  # .squeeze()
-        # p_mask = T.stack((p0_mask, p1_mask), dim=-1).unsqueeze(0)
         mask = T.zeros(1, 74, 74, 2)
         mask[:, p0_mask[0, :], p0_mask[1, :], 0] = 1
         mask[:, p1_mask[0, :], p1_mask[1, :], 1] = 1
@@ -282,17 +299,3 @@ class GameNet(nn.Module):
 
         mask = T.cat((road_mask, village_mask.repeat(2, 1)), dim=1)
         return mask
-
-        # if game.first_turn:
-        #     if game.first_turn_village_switch:
-        #         road_mask = T.zeros((self.sparse_edge.shape[1],), dtype=T.bool)
-        #     else:
-        #         village_mask = T.zeros((54,), dtype=T.bool)
-        #
-        # village_mask = T.diag_embed(village_mask).bool()
-        # if road_mask.sum() == 0:
-        #     road_mask = T.zeros_like(village_mask, dtype=T.bool)
-        # else:
-        #     road_mask = pyg.utils.to_dense_adj(self.sparse_edge[:, road_mask],
-        #                                        max_num_nodes=village_mask.shape[-1]).bool()
-        # return village_mask + road_mask

@@ -171,12 +171,12 @@ class PrioReplayBuffer:
 
     def save(self):
         os.makedirs('./ReplayBuffer/', exist_ok=True)
-        with open(f'./ReplayBuffer/{self.__repr__()}_buffer.pkl', 'wb') as f:
+        with open(f'./ReplayBuffer/ReplayBuffer.pkl', 'wb') as f:
             pickle.dump(self, f)
 
     def load(self) -> bool:
         try:
-            with open(f'./ReplayBuffer/{self.__repr__()}_buffer.pkl', 'rb') as f:
+            with open(f'./ReplayBuffer/ReplayBuffer.pkl', 'rb') as f:
                 temp_self = pickle.load(f)
                 self.__dict__.update(temp_self.__dict__)
                 return True
