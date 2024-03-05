@@ -188,7 +188,8 @@ class Board:
         if (hand < T.tensor([1, 0, 0, 1, 0])).any():
             return T.tensor([])
         if first_turn:
-            houses = self.state.x.nonzero()[:, player]
+            houses = self.state.x.nonzero()
+            houses = houses[houses[:, 1] == player, 0]
             house_edges = T.isin(self.state.edge_index, houses).any(0)
             return self.state.edge_index[:, house_edges]
 

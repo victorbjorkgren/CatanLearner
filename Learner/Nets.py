@@ -7,8 +7,8 @@ import torch_geometric as pyg
 from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 
 from Environment import Game
-from Utils import extract_attr, sparse_face_matrix, preprocess_adj, sparse_misc_node
-from Layers import MLP, PowerfulLayer, MultiHeadAttention
+from .Utils import extract_attr, sparse_face_matrix, preprocess_adj, sparse_misc_node
+from .Layers import MLP, PowerfulLayer, MultiHeadAttention
 
 
 class PlayerNet(nn.Module):
@@ -234,8 +234,8 @@ class GameNet(nn.Module):
 
     def get_dense(self, game: Game) -> Tuple[T.Tensor, int]:
         node_x, edge_x, face_x = extract_attr(game)
-        p0_mask = self.mask_util(game, 0).squeeze()
-        p1_mask = self.mask_util(game, 1).squeeze()
+        p0_mask = self.mask_util(game, 0).long().squeeze()
+        p1_mask = self.mask_util(game, 1).long().squeeze()
         # p_mask = T.stack((p0_mask, p1_mask), dim=-1).unsqueeze(0)
         mask = T.zeros(1, 74, 74, 2)
         mask[:, p0_mask[0, :], p0_mask[1, :], 0] = 1
