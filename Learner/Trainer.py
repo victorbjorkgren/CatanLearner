@@ -22,12 +22,10 @@ class Trainer:
         self.target_net = target_net
         self.buffer = buffer
         self.batch_size = batch_size
-        # self.reward_min = reward_min
         self.gamma = gamma
         self.optimizer = optim.Adam(self.q_net.parameters(), lr=1e-4, weight_decay=1e-5)
         self.batch_range = T.arange(self.batch_size, dtype=T.long)
 
-        # self.available_agents = None
         self.tick_iter = 0
 
         self.known_allowed_states = None
@@ -75,31 +73,18 @@ class Trainer:
         next_act, _ = self.get_batch_max(q[:, -1:])
         q = self.gather_actions(q, action)
 
-        # Get next Q from target net
-        with T.no_grad():
-            next_q, _, _ = self.target_net(
-                state[:, -1:, :, :],
-                T.ones_like(seq_lens),
-                lstm_target_state,
-                lstm_cell_state
-            )
-            next_q = next_q[batch_range, :, :, :, player]
-            next_q = self.gather_actions(next_q, next_act)
+        td_error = self.get_td_error(
+            q,
+            state,
+            reward,
+            next_act,
+            seq_lens,
+            lstm_target_state,
+            lstm_cell_state,
+            done,
+            player
+        )
 
-        reward[~done, seq_lens[~done.cpu()]-1] = next_q[~done, 0]
-        reward = self.propagate_rewards(reward)
-        target_q = reward[:, :-1]
-
-        for i in range(q.shape[0]):
-            if seq_lens[i] == q.shape[1]:
-                continue
-            q[i, seq_lens[i]:] = 0
-            target_q[i, seq_lens[i]:] = 0
-
-        q = q[:, :-1]
-
-        # Calculate loss
-        td_error = F.mse_loss(q, target_q, reduction="none")
         loss = (td_error * weights[:, None]).mean()  # + .001 * rule_break_loss
 
         self.optimizer.zero_grad()
@@ -123,20 +108,48 @@ class Trainer:
 
         return td_error.mean().item()
 
-    def save(self, method):
-        assert method in ['latest', 'checkpoint']
-        if method == 'latest':
-            self.q_net.save('latest')
-        else:
-            self.q_net.save(self.tick_iter)
+    def get_td_error(
+            self,
+            q: T.Tensor,
+            state: T.Tensor,
+            reward: T.Tensor,
+            next_act: T.Tensor,
+            seq_lens: T.Tensor,
+            lstm_target_state: T.Tensor,
+            lstm_cell_state: T.Tensor,
+            done: T.Tensor,
+            player: T.Tensor
+    ):
+        # Get next Q from target net
+        with T.no_grad():
+            next_q, _, _ = self.target_net(
+                state[:, -1:, :, :],
+                T.ones_like(seq_lens),
+                lstm_target_state,
+                lstm_cell_state
+            )
+            next_q = next_q[self.batch_range[q.shape[0]], :, :, :, player]
+            next_q = self.gather_actions(next_q, next_act)
 
-    def update_known_allowed(self, state_mask):
-        if self.known_allowed_states is None:
-            self.known_allowed_states = state_mask.clone().detach().any(0).squeeze()
-        else:
-            self.known_allowed_states = state_mask.clone().detach().any(0).squeeze() | self.known_allowed_states
+        reward[~done, seq_lens[~done.cpu()] - 1] = next_q[~done, 0]
+        reward = self.propagate_rewards(self.gamma, reward)
+        target_q = reward[:, :-1]
 
-    def propagate_rewards(self, rewards):
+        for i in range(q.shape[0]):
+            if seq_lens[i] == q.shape[1]:
+                continue
+            q[i, seq_lens[i]:] = 0
+            target_q[i, seq_lens[i]:] = 0
+
+        q = q[:, :-1]
+
+        # Calculate loss
+        td_error = F.mse_loss(q, target_q, reduction="none")
+
+        return td_error
+    
+    @staticmethod
+    def propagate_rewards(gamma, rewards):
         """
         Propagates rewards backwards through a sequence.
 
@@ -153,11 +166,24 @@ class Trainer:
         updated_rewards = reversed_rewards.clone()
 
         for t in range(1, rewards.size(1)):
-            updated_rewards[:, t] += self.gamma * updated_rewards[:, t - 1]
+            updated_rewards[:, t] += gamma * updated_rewards[:, t - 1]
 
         propagated_rewards = T.flip(updated_rewards, dims=[1])
 
         return propagated_rewards
+
+    def save(self, method):
+        assert method in ['latest', 'checkpoint']
+        if method == 'latest':
+            self.q_net.save('latest')
+        else:
+            self.q_net.save(self.tick_iter)
+
+    def update_known_allowed(self, state_mask):
+        if self.known_allowed_states is None:
+            self.known_allowed_states = state_mask.clone().detach().any(0).squeeze()
+        else:
+            self.known_allowed_states = state_mask.clone().detach().any(0).squeeze() | self.known_allowed_states
 
     @staticmethod
     def get_batch_max(batched_tensor: T.Tensor) -> Tuple[T.Tensor, T.Tensor]:
