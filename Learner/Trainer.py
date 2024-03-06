@@ -48,7 +48,7 @@ class Trainer:
 
         if self.tick_iter % 100 == 0:
             self.save('latest')
-        if self.tick_iter % 200 == 0:
+        if self.tick_iter % 2000 == 0:
             self.save('checkpoint')
 
         self.tick_iter += 1

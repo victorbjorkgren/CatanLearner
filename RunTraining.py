@@ -72,7 +72,7 @@ game.register_agents(agent_list)
 game.reset()
 
 
-def training_loop():
+def learner_loop():
     while True:
         td_loss = trainer.tick()
         td_loss_hist.append(td_loss)
@@ -80,8 +80,8 @@ def training_loop():
 
 td_loss_hist = deque(maxlen=HISTORY_DISPLAY)
 
-training_thread = threading.Thread(target=training_loop)
-training_thread.start()
+learner_thread = threading.Thread(target=learner_loop)
+learner_thread.start()
 
 iterator = tqdm(range(MAX_STEPS))
 for i in iterator:
@@ -93,18 +93,19 @@ for i in iterator:
     # On episode termination
     if done:
         game.render(training_img=True)
+        agent_tracker.update_elo()
         for ii in range(N_PLAYERS):
             game.player_agents[ii].signal_episode_done(ii)
             game.player_agents[ii].clear_cache()
-        agent_tracker.load_contestants('random')
+        agent_tracker.load_contestants('weighted')
         agent_tracker.shuffle_agents()
         game.reset()
 
     iterator.set_postfix_str(
         f"Ep: {game.episode}-{int(game.turn)}, "
         f"TD Loss: {sum(td_loss_hist) / HISTORY_DISPLAY:.3e} (tick {trainer.tick_iter:d}), "
-        f"RewHist: {[f'{agent.avg_reward:4f}' for agent in game.player_agents]}, "
+        f"Score: {[int(player.points) for player in game.players]}, "
         f"WinHist: {[agent.sum_win for agent in game.player_agents]}, "
-        f"AvgBeatTime: {[agent.avg_beat_time for agent in game.player_agents]}, "
+        f"AvgBeatTime: {[int(agent.avg_beat_time) for agent in game.player_agents]}, "
         f"Players: {[agent for agent in game.player_agents]}"
     )
