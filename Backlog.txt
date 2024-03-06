@@ -1,0 +1,9 @@
+ELO-viktade matcher
+
+Trainer kollar högsta nummer på PastTitans och fortsätter därifrån
+
+Alla regler
+
+Paralella aktörer
+
+Spelbar frontend

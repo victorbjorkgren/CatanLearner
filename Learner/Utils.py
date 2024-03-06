@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Tuple
+from typing import Tuple, List
 
 import torch as T
 
@@ -110,64 +110,119 @@ class Transition:
     lstm_cell: T.Tensor | None = None
 
 
-def sparse_face_matrix(face_index, to_undirected):
-    n = face_index.size(0)  # Number of faces
-    num_nodes_per_face = face_index.size(1)  # Should be 6
-    face_indices = T.arange(54, 54 + n).repeat_interleave(num_nodes_per_face)
+class TensorUtils:
+    @staticmethod
+    def sparse_face_matrix(face_index, to_undirected):
+        n = face_index.size(0)  # Number of faces
+        num_nodes_per_face = face_index.size(1)  # Should be 6
+        face_indices = T.arange(54, 54 + n).repeat_interleave(num_nodes_per_face)
 
-    node_indices = face_index.flatten()
+        node_indices = face_index.flatten()
 
-    # Create the [2, K] matrix by stacking face_indices and node_indices
-    connections = T.stack([node_indices, face_indices], dim=0)
+        # Create the [2, K] matrix by stacking face_indices and node_indices
+        connections = T.stack([node_indices, face_indices], dim=0)
 
-    if to_undirected:
-        connections = T.cat((connections, connections.flip(0)), dim=1)
-    return connections
+        if to_undirected:
+            connections = T.cat((connections, connections.flip(0)), dim=1)
+        return connections
 
+    @staticmethod
+    def sparse_misc_node(node_n, misc_n, to_undirected):
+        node_range = T.arange(node_n + 1)
+        sparse = T.stack((T.full_like(node_range, misc_n), node_range), dim=0)
+        if to_undirected:
+            sparse = T.cat((sparse, sparse.flip(0)), dim=1)
+        return sparse
 
-def sparse_misc_node(node_n, misc_n, to_undirected):
-    node_range = T.arange(node_n + 1)
-    sparse = T.stack((T.full_like(node_range, misc_n), node_range), dim=0)
-    if to_undirected:
-        sparse = T.cat((sparse, sparse.flip(0)), dim=1)
-    return sparse
+    @staticmethod
+    def preprocess_adj(adj, batch_size, add_self_loops):
+        if add_self_loops:
+            i = T.eye(adj.size(1)).to(adj.device)
+            a_hat = adj[0] + i
+        else:
+            a_hat = adj[0]
+        d_hat_diag = T.sum(a_hat, dim=1).pow(-0.5)
+        d_hat = T.diag(d_hat_diag)
+        adj_normalized = T.mm(T.mm(d_hat, a_hat), d_hat)
+        return adj_normalized.repeat((batch_size, 1, 1))
 
+    @staticmethod
+    def get_dense_masks(game, i_am_player):
+        road_mask = game.board.get_road_mask(i_am_player, game.players[i_am_player].hand, game.first_turn)
+        village_mask = game.board.get_village_mask(i_am_player, game.players[i_am_player].hand, game.first_turn)
+        return road_mask, village_mask
 
-def preprocess_adj(adj, batch_size, add_self_loops):
-    if add_self_loops:
-        i = T.eye(adj.size(1)).to(adj.device)
-        a_hat = adj[0] + i
-    else:
-        a_hat = adj[0]
-    d_hat_diag = T.sum(a_hat, dim=1).pow(-0.5)
-    d_hat = T.diag(d_hat_diag)
-    adj_normalized = T.mm(T.mm(d_hat, a_hat), d_hat)
-    return adj_normalized.repeat((batch_size, 1, 1))
+    @staticmethod
+    def get_cache_key(tensor: T.Tensor) -> Tuple:
+        return tuple(tensor.numpy().flatten())
 
+    @staticmethod
+    def pairwise_isin(tensor_a: T.Tensor, tensor_b: T.Tensor) -> T.Tensor:
+        # Step 1: Broadcasting and Comparison
+        # We want each pair in tensor_a (2, N) to compare against every pair in tensor_b (2, M)
+        # So, we reshape tensor_a to (2, N, 1) and tensor_b to (2, 1, M) to prepare for broadcasting
+        tensor_a_exp = tensor_a.unsqueeze(2)  # Shape becomes (2, N, 1)
+        tensor_b_exp = tensor_b.unsqueeze(1)  # Shape becomes (2, 1, M)
+        # Now, perform element-wise comparison
+        comparison = tensor_a_exp == tensor_b_exp  # Shape will be (2, N, M) after broadcasting
+        # Step 2: Logical AND Operation
+        # Check if both elements of the pair match
+        pair_matches = comparison.all(dim=0)  # Collapse along the pair dimension, shape becomes (N, M)
+        # Step 3: Aggregation
+        # Determine if each pair in tensor_a matches with any pair in tensor_b
+        matches = pair_matches.any(dim=1)
 
-def get_dense_masks(game, i_am_player):
-    road_mask = game.board.get_road_mask(i_am_player, game.players[i_am_player].hand, game.first_turn)
-    village_mask = game.board.get_village_mask(i_am_player, game.players[i_am_player].hand, game.first_turn)
-    return road_mask, village_mask
+        return matches
 
+    @staticmethod
+    def gather_actions(values, indices):
+        return values[
+            T.arange(values.size(0)).unsqueeze(1),
+            T.arange(values.size(1)),
+            indices[:, :, 0],
+            indices[:, :, 1]
+        ]
 
-def get_cache_key(tensor: T.Tensor) -> Tuple:
-    return tuple(tensor.numpy().flatten())
+    @staticmethod
+    def propagate_rewards(gamma, rewards):
+        """
+        Propagates rewards backwards through a sequence.
 
+        Args:
+        - rewards (torch.Tensor): Tensor of shape [B, T] containing rewards,
+          where B is batch size and T is sequence length.
+        - gamma (float): Discount factor for future rewards.
 
-def pairwise_isin(tensor_a: T.Tensor, tensor_b: T.Tensor) -> T.Tensor:
-    # Step 1: Broadcasting and Comparison
-    # We want each pair in tensor_a (2, N) to compare against every pair in tensor_b (2, M)
-    # So, we reshape tensor_a to (2, N, 1) and tensor_b to (2, 1, M) to prepare for broadcasting
-    tensor_a_exp = tensor_a.unsqueeze(2)  # Shape becomes (2, N, 1)
-    tensor_b_exp = tensor_b.unsqueeze(1)  # Shape becomes (2, 1, M)
-    # Now, perform element-wise comparison
-    comparison = tensor_a_exp == tensor_b_exp  # Shape will be (2, N, M) after broadcasting
-    # Step 2: Logical AND Operation
-    # Check if both elements of a pair match
-    pair_matches = comparison.all(dim=0)  # Collapse along the pair dimension, shape becomes (N, M)
-    # Step 3: Aggregation
-    # Determine if each pair in tensor_a matches with any pair in tensor_b
-    matches = pair_matches.any(dim=1)  # Check along M dimension for any True values, shape becomes (N,)
+        Returns:
+        - torch.Tensor: Tensor of shape [B, T] with propagated rewards.
+        """
+        rewards = rewards.float()
+        reversed_rewards = T.flip(rewards, dims=[1])
+        updated_rewards = reversed_rewards.clone()
 
-    return matches
+        for t in range(1, rewards.size(1)):
+            updated_rewards[:, t] += gamma * updated_rewards[:, t - 1]
+
+        propagated_rewards = T.flip(updated_rewards, dims=[1])
+
+        return propagated_rewards
+
+    @staticmethod
+    def nn_sum(tensor: T.Tensor, dims: List[int]) -> T.Tensor:
+        for dim in dims:
+            tensor = tensor.sum(dim, keepdim=True)
+        return tensor
+
+    @staticmethod
+    def get_batch_max(batched_tensor: T.Tensor) -> Tuple[T.Tensor, T.Tensor]:
+        b, s, n, _ = batched_tensor.shape
+        max_act = T.empty((b, s, 2), dtype=T.long)
+        max_q = T.empty((b, s)).to(batched_tensor.device)
+        for i in range(b):
+            for j in range(s):
+                b_inds = T.argwhere(batched_tensor[i, j] == batched_tensor[i, j].max())
+                if b_inds.numel() > 2:
+                    b_inds = b_inds[T.randint(0, b_inds.shape[0], (1,))]
+                max_act[i, j, :] = b_inds
+                max_q[i, j] = batched_tensor[i, j].max()
+        return max_act, max_q

@@ -6,12 +6,14 @@ from typing import Tuple, Optional
 import torch as T
 
 from Environment import Game
+from Learner.Loss import Loss
 from Learner.Nets import GameNet
 from Learner.PrioReplayBuffer import PrioReplayBuffer
-from Learner.Utils import get_cache_key, TensorDeque, Transition
+from Learner.Utils import TensorDeque, Transition, TensorUtils
+from Learner.constants import GAMMA
 
 
-class BaseAgent:
+class Agent:
     def __init__(self,
                  game: Game,
                  buffer: PrioReplayBuffer,
@@ -21,6 +23,7 @@ class BaseAgent:
                  ) -> None:
         # super().__init__(capacity, max_seq_length, alpha, beta)
         self._last_transition: Transition | None = None
+        self.tracker_instance = None
 
         self.game = game
         self.buffer = buffer
@@ -28,6 +31,7 @@ class BaseAgent:
         self.burn_in_length = burn_in_length
 
         self.state_seq = TensorDeque(max_len=max_seq_length)
+        self.q_seq = TensorDeque(max_len=max_seq_length)
         self.action_seq = TensorDeque(max_len=max_seq_length)
         self.reward_seq = TensorDeque(max_len=max_seq_length, queue_like=T.zeros((1,), dtype=T.float))
 
@@ -35,7 +39,7 @@ class BaseAgent:
         self.lstm_cell_seq = TensorDeque(max_len=max_seq_length, queue_like=T.zeros((1, 1, 32), dtype=T.float))
 
         self.has_won: bool = False
-        self.episode_rewards = []
+        self.episode_score: int = 0
         self.house_history = deque(maxlen=history_display)
         self.win_history = deque(maxlen=history_display)
         self.beat_time = deque(maxlen=history_display)
@@ -61,7 +65,6 @@ class BaseAgent:
             action_type = randint(0, 2)
 
         if action_type == 0:
-            self._to_buffer(action=T.tensor((73, 73)))
             return T.tensor((0, 0)), T.tensor((73, 73))
 
         elif action_type == 1:
@@ -72,10 +75,8 @@ class BaseAgent:
             )
             if road_mask.numel() > 0:
                 index, raw_index = self._sample_road(road_mask)
-                self._to_buffer(action=raw_index)
                 return T.tensor((1, index)), raw_index
             else:
-                self._to_buffer(action=T.tensor((73, 73)))
                 return T.tensor((0, 0)), T.tensor((73, 73))
 
         elif action_type == 2:
@@ -86,10 +87,8 @@ class BaseAgent:
             )
             if village_mask.numel() > 0:
                 index = self._sample_village(village_mask)
-                self._to_buffer(action=T.tensor((index, index)))
                 return T.tensor((action_type, index)), T.tensor((index, index))
             else:
-                self._to_buffer(action=T.tensor((73, 73)))
                 return T.tensor((0, 0)), T.tensor((73, 73))
         else:
             raise RuntimeError(f"Illegal action type chosen {action_type}")
@@ -97,7 +96,6 @@ class BaseAgent:
     @staticmethod
     def _sample_village(village_mask) -> int:
         if village_mask.numel() > 0:
-            # available_villages = village_mask.argwhere().squeeze()
             if village_mask.numel() == 1:
                 return village_mask.item()
             else:
@@ -107,7 +105,6 @@ class BaseAgent:
 
     def _sample_road(self, road_mask: T.Tensor) -> Tuple[int, T.Tensor]:
         if road_mask.numel() > 0:
-            # available_roads = road_mask.argwhere().squeeze()
             if road_mask.numel() == 2:
                 index = road_mask
             else:
@@ -133,21 +130,58 @@ class BaseAgent:
         self.state_seq.clear()
         self.action_seq.clear()
         self.reward_seq.clear()
+        self.q_seq.clear()
 
         self.lstm_state_seq.clear()
         self.lstm_cell_seq.clear()
 
-        self.episode_rewards.clear()
+        self.episode_score = 0
 
     def flush_buffer(self, done: bool, i_am_player: int, force: bool = False) -> None:
         has_length = len(self.state_seq) >= (self.max_seq_length - self.burn_in_length)
         if has_length | force:
+            state = self.state_seq.to_tensor()
+            action = self.action_seq.to_tensor()
+            reward = self.reward_seq.to_tensor()
+            lstm_state = self.lstm_state_seq.to_tensor()
+            lstm_cell = self.lstm_cell_seq.to_tensor()
+            q = self.q_seq.to_tensor()
+
+            state = state.permute(1, 0, 2, 3, 4)
+            action = action.long()
+            reward = reward.permute(1, 0)
+            q = q.unsqueeze(0)
+            lstm_state = lstm_state[:-1, 0, 0, :]
+            lstm_cell = lstm_cell[:-1, 0, 0, :]
+
+            lstm_target_state = lstm_state[None, None, -1, :]
+            lstm_target_cell = lstm_cell[None, None, -1, :]
+
+            seq_len = T.tensor([state.shape[1]], dtype=T.long)
+            titan_q_net = self.tracker_instance.get_titan().q_net
+            # with T.no_grad():
+            #     q, _, _ =titan_q_net(state, seq_len, lstm_target_state, lstm_target_cell)
+            # next_act = T.argwhere(q == q.max()).cpu()
+            td_error = Loss.get_td_error(
+                titan_q_net,
+                q,
+                state,
+                reward,
+                GAMMA,
+                None,
+                seq_len,
+                lstm_target_state,
+                lstm_target_cell,
+                T.tensor([done], dtype=T.bool),
+                T.tensor([i_am_player], dtype=T.long)
+            )
             self.buffer.add(
-                self.state_seq,
-                self.action_seq,
-                self.reward_seq,
-                self.lstm_state_seq,
-                self.lstm_cell_seq,
+                state,
+                action,
+                reward,
+                td_error.mean(),
+                lstm_state,
+                lstm_cell,
                 done,
                 self.game.episode,
                 i_am_player
@@ -155,7 +189,8 @@ class BaseAgent:
 
     def update_reward(self, reward: float, done: bool, i_am_player: int) -> None:
         self._to_buffer(reward=T.Tensor([reward]))
-        self.episode_rewards.append(reward)
+        if reward > 0.:
+            self.episode_score += 1
         if not done:
             self.flush_buffer(False, i_am_player, force=False)
 
@@ -168,6 +203,7 @@ class BaseAgent:
             state: Optional[T.Tensor] = None,
             action: Optional[T.Tensor] = None,
             reward: Optional[T.Tensor] = None,
+            q: Optional[T.Tensor] = None,
             lstm_state: Optional[T.Tensor] = None,
             lstm_cell: Optional[T.Tensor] = None
     ) -> None:
@@ -177,6 +213,8 @@ class BaseAgent:
             self.action_seq.append(action)
         if reward is not None:
             self.reward_seq.append(reward)
+        if q is not None:
+            self.q_seq.append(q)
         if lstm_state is not None:
             self.lstm_state_seq.append(lstm_state)
         if lstm_cell is not None:
@@ -204,21 +242,20 @@ class BaseAgent:
         return sum(self.win_history)
 
 
-class RandomAgent(BaseAgent):
-    def __init__(self, game: Game, buffer: PrioReplayBuffer, history_display: int = 100) -> None:
+class RandomAgent:
+    def __init__(self) -> None:
         raise AssertionError("RandomAgent is stale!")
-        super().__init__(game, buffer)
 
     def __repr__(self):
         return "RandomAgent"
 
     def sample_action(self, state: T.Tensor, i_am_player: int) -> tuple[T.Tensor, T.Tensor]:
-        self._to_buffer(state=state)
-        self._to_buffer(lstm_state=T.zeros((1, 1, 32), dtype=T.float))
-        self._to_buffer(lstm_cell=T.zeros((1, 1, 32), dtype=T.float))
+        # self._to_buffer(state=state)
+        # self._to_buffer(lstm_state=T.zeros((1, 1, 32), dtype=T.float))
+        # self._to_buffer(lstm_cell=T.zeros((1, 1, 32), dtype=T.float))
 
-        return self.sample_random(i_am_player)
-
+        # return self.sample_random(i_am_player)
+        pass
 
     def clear_cache(self):
         pass
@@ -226,7 +263,6 @@ class RandomAgent(BaseAgent):
     @staticmethod
     def _sample_village(village_mask) -> int:
         if village_mask.numel() > 0:
-            # available_villages = village_mask.argwhere().squeeze()
             if village_mask.numel() == 1:
                 return village_mask.item()
             else:
@@ -235,22 +271,23 @@ class RandomAgent(BaseAgent):
             raise RuntimeError("Random Agent could not find house on round 1")
 
     def _sample_road(self, road_mask: T.Tensor) -> Tuple[int, T.Tensor]:
-        if road_mask.numel() > 0:
-            # available_roads = road_mask.argwhere().squeeze()
-            if road_mask.numel() == 2:
-                index = road_mask
-            else:
-                index = road_mask[:, T.randint(0, road_mask.shape[1], (1,))]
-            edge_index = (
-                    (self.game.board.state.edge_index[0, :] == index[0, :])
-                    & (self.game.board.state.edge_index[1, :] == index[1, :])
-            ).nonzero()
-            return edge_index.item(), index.squeeze()
-        else:
-            raise RuntimeError("Random Agent could not find road on round 1")
+        # if road_mask.numel() > 0:
+        #     # available_roads = road_mask.argwhere().squeeze()
+        #     if road_mask.numel() == 2:
+        #         index = road_mask
+        #     else:
+        #         index = road_mask[:, T.randint(0, road_mask.shape[1], (1,))]
+        #     edge_index = (
+        #             (self.game.board.state.edge_index[0, :] == index[0, :])
+        #             & (self.game.board.state.edge_index[1, :] == index[1, :])
+        #     ).nonzero()
+        #     return edge_index.item(), index.squeeze()
+        # else:
+        #     raise RuntimeError("Random Agent could not find road on round 1")
+        pass
 
 
-class QAgent(BaseAgent):
+class QAgent(Agent):
     def __init__(
             self,
             q_net: GameNet,
@@ -269,6 +306,7 @@ class QAgent(BaseAgent):
         self.epsilon = 1.
 
         self.my_suffix = None
+        self.my_name = None
 
         self.sparse_edge = game.board.state.edge_index.clone()
         self.empty_edge = T.zeros((self.sparse_edge.shape[1],), dtype=T.bool)
@@ -290,22 +328,28 @@ class QAgent(BaseAgent):
     def unset_titan(self):
         self.is_titan = False
 
-    def load_state(self, suffix, epsilon):
+    def load_state(self, suffix, epsilon, elo):
         if self.is_titan:
             self.q_net.load('latest')
             self.epsilon = 1.
-            self.my_suffix = 'Titan'
+            self.my_suffix = f'Titan ({int(elo)})'
+            self.my_name = 'Titan'
+        elif epsilon == 0.:
+            self.my_name = 'Random'
+            self.my_suffix = f'Random ({int(elo)})'
+            self.epsilon = 0.
         else:
             self.q_net.load(suffix)
+            self.my_name = suffix
             self.epsilon = epsilon
             str_start = len("Q_Agent") + 1
             str_end = len(".pth")
-            self.my_suffix = f"{suffix[str_start: -str_end]}_{epsilon:.2f}"
+            self.my_suffix = f"{suffix[str_start: -str_end]}_{epsilon:.2f} ({int(elo)})"
 
     def sample_action(self, state: T.Tensor, i_am_player: int) -> Tuple[T.Tensor, T.Tensor]:
         build_q: T.Tensor
 
-        state_key = get_cache_key(state)
+        state_key = TensorUtils.get_cache_key(state)
 
         self._to_buffer(state=state)
 
@@ -322,7 +366,10 @@ class QAgent(BaseAgent):
             self._to_buffer(lstm_cell=cn)
 
         if random() > self.epsilon:
-            return self.sample_random(i_am_player)
+            action, raw_action = self.sample_random(i_am_player)
+            self._to_buffer(action=raw_action)
+            self._to_buffer(q=q[0, 0, raw_action[0], raw_action[1], i_am_player])
+            return action, raw_action
 
         pass_q = q[0, 0, -1, -1, i_am_player]
         q = q[0, 0, :54, :54, i_am_player]
@@ -331,6 +378,7 @@ class QAgent(BaseAgent):
         build_q = q.max()
 
         if (pass_q > build_q) & (not self.game.first_turn):
+            self._to_buffer(q=pass_q)
             self._to_buffer(action=T.tensor((73, 73)))
             return T.tensor((0, 0)), T.tensor((73, 73))
         else:
@@ -348,6 +396,7 @@ class QAgent(BaseAgent):
                         & (self.game.board.state.edge_index[1] == build_action[1])
                 )
                 index = T.argwhere(bool_hit).item()
+                self._to_buffer(q=build_q)
                 self._to_buffer(action=build_action)
                 self._push_cache(state_key, build_action)
                 return T.tensor((1, index)), build_action
@@ -355,6 +404,7 @@ class QAgent(BaseAgent):
             elif build_action[0] == build_action[1]:
                 if build_action[0] >= 54:
                     raise RuntimeError("Non-node index returned for building settlement")
+                self._to_buffer(q=build_q)
                 self._to_buffer(action=build_action)
                 self._push_cache(state_key, build_action)
                 return T.tensor((2, build_action[0])), build_action

@@ -8,7 +8,7 @@ import numpy as np
 import torch as T
 from torch_geometric.utils.convert import to_networkx
 
-from Learner.Agents import BaseAgent, RandomAgent
+from Learner.Agents import Agent
 from .Board import Board
 from .Player import Player
 from .constants import *
@@ -21,7 +21,7 @@ class Game:
         self.max_turns = max_turns
         self.episode = start_episode
 
-        self.player_agents: Optional[List[BaseAgent]] = None
+        self.player_agents: Optional[List[Agent]] = None
         self.first_turn_village_switch: Optional[bool] = None
         self.first_turn: Optional[bool] = None
         self.current_player: Optional[int] = None
@@ -52,7 +52,7 @@ class Game:
         self.first_turn_village_switch = True
         self.publish('reset')
 
-    def register_agents(self, player_agents: [BaseAgent, BaseAgent]):
+    def register_agents(self, player_agents: [Agent, Agent]):
         assert len(player_agents) == self.n_players
         self.player_agents = player_agents
 
