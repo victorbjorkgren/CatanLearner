@@ -336,7 +336,7 @@ class QAgent(Agent):
             self.epsilon = 1.
             self.my_suffix = f'Titan ({int(elo)})'
             self.my_name = 'Titan'
-        elif epsilon == 0.:
+        elif (epsilon == 0.) | (suffix == 'Random'):
             self.my_name = 'Random'
             self.my_suffix = f'Random ({int(elo)})'
             self.epsilon = 0.

@@ -1,7 +1,5 @@
 (19:30 2024-03-06 infördes prio för aktörer, loss kan skena)
 
-Trainer kollar högsta nummer på PastTitans och fortsätter därifrån
-
 Alla regler
 
 Paralella aktörer
