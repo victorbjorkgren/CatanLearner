@@ -17,14 +17,17 @@ class Trainer:
                  target_net: GameNet,
                  buffer: PrioReplayBuffer,
                  batch_size: int,
-                 gamma: float
+                 gamma: float,
+                 learning_rate: float,
+                 reward_scale: float
                  ):
         self.q_net = q_net
         self.target_net = target_net
         self.buffer = buffer
         self.batch_size = batch_size
         self.gamma = gamma
-        self.optimizer = optim.Adam(self.q_net.parameters(), lr=1e-4, weight_decay=1e-5)
+        self.reward_scale = reward_scale
+        self.optimizer = optim.Adam(self.q_net.parameters(), lr=learning_rate, weight_decay=1e-5)
         self.batch_range = T.arange(self.batch_size, dtype=T.long)
 
         self.tick_iter = 0
@@ -66,6 +69,7 @@ class Trainer:
 
         state = self.buffer.data['state'][inds].to(self.q_net.on_device)
         action = self.buffer.data['action'][inds].to(self.q_net.on_device)
+        was_trade = self.buffer.data['was_trade'][inds].to(self.q_net.on_device)
         reward = self.buffer.data['reward'][inds].to(self.q_net.on_device)
         done = self.buffer.data['done'][inds].bool().to(self.q_net.on_device)
         player = self.buffer.data['player'][inds].to(self.q_net.on_device)
@@ -76,11 +80,14 @@ class Trainer:
         lstm_target_state = self.buffer.data['lstm_state'][None, inds, -1, :].to(self.q_net.on_device)
         lstm_target_cell = self.buffer.data['lstm_cell'][None, inds, -1, :].to(self.q_net.on_device)
 
-        q, _, _ = self.q_net(state, seq_lens, lstm_state, lstm_cell)
+        reward = reward * self.reward_scale
+
+        q, trade_q, _, _ = self.q_net(state, seq_lens, lstm_state, lstm_cell)
         q = q[batch_range, :, :, :, player]
+        trade_q = trade_q[batch_range, :, :, :, player]
 
         next_act, _ = TensorUtils.get_batch_max(q[:, -1:])
-        q = TensorUtils.gather_actions(q, action)
+        q = TensorUtils.gather_actions(q, trade_q, action, was_trade)
 
         td_error = Loss.get_td_error(
             self.target_net,
@@ -96,8 +103,8 @@ class Trainer:
             player
         )
 
-        td_error = T.clamp(td_error, 0, 10)
-        loss = (td_error.clamp(0., 10.) * weights[:, None]).mean()  # + .001 * rule_break_loss
+        # td_error = T.clamp(td_error, 0, 10)
+        loss = (td_error * weights[:, None]).mean()  # + .001 * rule_break_loss
 
         self.optimizer.zero_grad()
         loss.backward()
