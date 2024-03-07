@@ -10,7 +10,7 @@ from Learner.Loss import Loss
 from Learner.Nets import GameNet
 from Learner.PrioReplayBuffer import PrioReplayBuffer
 from Learner.Utils import TensorDeque, Transition, TensorUtils
-from Learner.constants import GAMMA
+from Learner.constants import GAMMA, USE_ACTOR_PRIO
 
 
 class Agent:
@@ -154,27 +154,29 @@ class Agent:
             lstm_state = lstm_state[:-1, 0, 0, :]
             lstm_cell = lstm_cell[:-1, 0, 0, :]
 
-            lstm_target_state = lstm_state[None, None, -1, :]
-            lstm_target_cell = lstm_cell[None, None, -1, :]
+            if USE_ACTOR_PRIO:
+                lstm_target_state = lstm_state[None, None, -1, :]
+                lstm_target_cell = lstm_cell[None, None, -1, :]
 
-            seq_len = T.tensor([state.shape[1]], dtype=T.long)
-            titan_q_net = self.tracker_instance.get_titan().q_net
-            # with T.no_grad():
-            #     q, _, _ =titan_q_net(state, seq_len, lstm_target_state, lstm_target_cell)
-            # next_act = T.argwhere(q == q.max()).cpu()
-            td_error = Loss.get_td_error(
-                titan_q_net,
-                q,
-                state,
-                reward,
-                GAMMA,
-                None,
-                seq_len,
-                lstm_target_state,
-                lstm_target_cell,
-                T.tensor([done], dtype=T.bool),
-                T.tensor([i_am_player], dtype=T.long)
-            )
+                seq_len = T.tensor([state.shape[1]], dtype=T.long)
+                titan_q_net = self.tracker_instance.get_titan().q_net
+
+                td_error = Loss.get_td_error(
+                    titan_q_net,
+                    q,
+                    state,
+                    reward,
+                    GAMMA,
+                    None,
+                    seq_len,
+                    lstm_target_state,
+                    lstm_target_cell,
+                    T.tensor([done], dtype=T.bool),
+                    T.tensor([i_am_player], dtype=T.long)
+                )
+            else:
+                td_error = T.tensor([1.], dtype=T.float)
+
             self.buffer.add(
                 state,
                 action,

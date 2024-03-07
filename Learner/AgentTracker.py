@@ -196,6 +196,7 @@ class AgentTracker:
                     self.best_elo = v
         except FileNotFoundError:
             print('No ELO for checkpoints found - init fresh')
+            self.best_elo = 1000
             self.checkpoint_elo = {}
             checkpoints = os.listdir('./PastTitans/')
             for e in checkpoints:

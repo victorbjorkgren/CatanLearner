@@ -101,7 +101,7 @@ class PrioReplayBuffer:
 
         self._size = min(self._capacity, self._size + 1)
 
-        self.save_test()
+        # self.save_test()
 
     def sample(self, n):
         prob = self.data['prio'] / self.data['prio'].sum()
