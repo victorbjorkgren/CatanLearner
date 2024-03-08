@@ -10,7 +10,7 @@ from Learner.Loss import Loss
 from Learner.Nets import GameNet
 from Learner.PrioReplayBuffer import PrioReplayBuffer
 from Learner.Utils import TensorDeque, Transition, TensorUtils
-from Learner.constants import USE_ACTOR_PRIO, GAMMA
+from Learner.constants import USE_ACTOR_PRIO, GAMMA, FAILURE_ALLOWANCE
 
 
 class Agent:
@@ -21,7 +21,7 @@ class Agent:
                  burn_in_length: int,
                  history_display: int = 100
                  ) -> None:
-        # super().__init__(capacity, max_seq_length, alpha, beta)
+
         self._last_transition: Transition | None = None
         self.tracker_instance = None
 
@@ -41,12 +41,34 @@ class Agent:
 
         self.has_won: bool = False
         self.episode_score: int = 0
+        self.fail_count = 0
         self.house_history = deque(maxlen=history_display)
         self.win_history = deque(maxlen=history_display)
         self.beat_time = deque(maxlen=history_display)
 
     def __repr__(self):
         return "BaseAgent"
+
+    @property
+    def avg_reward(self) -> float:
+        if len(self.reward_seq) > 0:
+            reward_history = self.reward_seq.to_tensor()
+            # n = (reward_history > 0).sum().item()
+            # n = max(1, n)
+            return reward_history.sum().item()  # / n
+        else:
+            return 0.
+
+    @property
+    def avg_beat_time(self) -> float:
+        if len(self.beat_time) > 0:
+            return sum(self.beat_time) / len(self.beat_time)
+        else:
+            return 0.
+
+    @property
+    def sum_win(self):
+        return sum(self.win_history)
 
     @abstractmethod
     def sample_action(self, state: T.Tensor, i_am_player: int) -> tuple[T.Tensor, T.Tensor]:
@@ -55,6 +77,16 @@ class Agent:
     @abstractmethod
     def clear_cache(self):
         pass
+
+    @staticmethod
+    def _sample_village(village_mask) -> int:
+        if village_mask.numel() > 0:
+            if village_mask.numel() == 1:
+                return village_mask.item()
+            else:
+                return village_mask[T.randint(0, village_mask.shape[0], (1,))]
+        else:
+            raise RuntimeError("Random Agent could not find house on round 1")
 
     def sample_random(self, i_am_player: int) -> Tuple[T.Tensor, T.Tensor, bool]:
         if self.game.first_turn:
@@ -105,16 +137,6 @@ class Agent:
         else:
             raise RuntimeError(f"Illegal action type chosen {action_type}")
 
-    @staticmethod
-    def _sample_village(village_mask) -> int:
-        if village_mask.numel() > 0:
-            if village_mask.numel() == 1:
-                return village_mask.item()
-            else:
-                return village_mask[T.randint(0, village_mask.shape[0], (1,))]
-        else:
-            raise RuntimeError("Random Agent could not find house on round 1")
-
     def _sample_road(self, road_mask: T.Tensor) -> Tuple[int, T.Tensor]:
         if road_mask.numel() > 0:
             if road_mask.numel() == 2:
@@ -130,7 +152,7 @@ class Agent:
             raise RuntimeError("Random Agent could not find road on round 1")
 
     def signal_episode_done(self, i_am_player: int) -> None:
-        self.flush_buffer(True, i_am_player, force=True)
+        self._flush_buffer(True, i_am_player, force=True)
 
         if self.has_won:
             self.win_history.append(1)
@@ -150,7 +172,7 @@ class Agent:
 
         self.episode_score = 0
 
-    def flush_buffer(self, done: bool, i_am_player: int, force: bool = False) -> None:
+    def _flush_buffer(self, done: bool, i_am_player: int, force: bool = False) -> None:
         has_length = len(self.state_seq) >= (self.max_seq_length - self.burn_in_length)
         if has_length | force:
             state = self.state_seq.to_tensor()
@@ -210,10 +232,16 @@ class Agent:
         if reward > 0.:
             self.episode_score += 1
         if not done:
-            self.flush_buffer(False, i_am_player, force=False)
+            self._flush_buffer(False, i_am_player, force=False)
 
     def register_victory(self) -> None:
         self.has_won = True
+
+    def signal_failure(self, failed):
+        if failed & (not self.game.first_turn):
+            self.fail_count += 1
+        else:
+            self.fail_count = 0
 
     def _to_buffer(
             self,
@@ -240,72 +268,6 @@ class Agent:
             self.lstm_cell_seq.append(lstm_cell)
         if was_trade is not None:
             self.was_trade_seq.append(was_trade)
-
-    @property
-    def avg_reward(self) -> float:
-        if len(self.reward_seq) > 0:
-            reward_history = self.reward_seq.to_tensor()
-            # n = (reward_history > 0).sum().item()
-            # n = max(1, n)
-            return reward_history.sum().item()  # / n
-        else:
-            return 0.
-
-    @property
-    def avg_beat_time(self) -> float:
-        if len(self.beat_time) > 0:
-            return sum(self.beat_time) / len(self.beat_time)
-        else:
-            return 0.
-
-    @property
-    def sum_win(self):
-        return sum(self.win_history)
-
-
-class RandomAgent:
-    def __init__(self) -> None:
-        raise AssertionError("RandomAgent is stale!")
-
-    def __repr__(self):
-        return "RandomAgent"
-
-    def sample_action(self, state: T.Tensor, i_am_player: int) -> tuple[T.Tensor, T.Tensor]:
-        # self._to_buffer(state=state)
-        # self._to_buffer(lstm_state=T.zeros((1, 1, 32), dtype=T.float))
-        # self._to_buffer(lstm_cell=T.zeros((1, 1, 32), dtype=T.float))
-
-        # return self.sample_random(i_am_player)
-        pass
-
-    def clear_cache(self):
-        pass
-
-    @staticmethod
-    def _sample_village(village_mask) -> int:
-        if village_mask.numel() > 0:
-            if village_mask.numel() == 1:
-                return village_mask.item()
-            else:
-                return village_mask[T.randint(0, village_mask.shape[0], (1,))]
-        else:
-            raise RuntimeError("Random Agent could not find house on round 1")
-
-    def _sample_road(self, road_mask: T.Tensor) -> Tuple[int, T.Tensor]:
-        # if road_mask.numel() > 0:
-        #     # available_roads = road_mask.argwhere().squeeze()
-        #     if road_mask.numel() == 2:
-        #         index = road_mask
-        #     else:
-        #         index = road_mask[:, T.randint(0, road_mask.shape[1], (1,))]
-        #     edge_index = (
-        #             (self.game.board.state.edge_index[0, :] == index[0, :])
-        #             & (self.game.board.state.edge_index[1, :] == index[1, :])
-        #     ).nonzero()
-        #     return edge_index.item(), index.squeeze()
-        # else:
-        #     raise RuntimeError("Random Agent could not find road on round 1")
-        pass
 
 
 class QAgent(Agent):
@@ -405,7 +367,11 @@ class QAgent(Agent):
         build_q = q_mat.max()
         trade_q = q_trade_mat[0].max() + q_trade_mat[1].max()
 
-        if (pass_q > build_q) & (pass_q > trade_q) & (not self.game.first_turn):
+        pass_q_is_max = (pass_q > build_q) & (pass_q > trade_q)
+        fail_allowance_reached = (self.fail_count > FAILURE_ALLOWANCE)
+        not_first_turn = (not self.game.first_turn)
+
+        if (pass_q_is_max | fail_allowance_reached) & not_first_turn:
             self._to_buffer(q=pass_q)
             self._to_buffer(action=T.tensor((73, 73)))
             self._to_buffer(was_trade=T.tensor([False], dtype=T.bool))

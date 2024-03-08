@@ -91,6 +91,7 @@ for i in iterator:
     action, raw_action = game.current_agent.sample_action(observation, i_am_player=game.current_player)
     reward, done, succeeded = game.step(action)
     game.player_agents[obs_player].update_reward(reward, done, obs_player)
+    game.player_agents[obs_player].signal_failure(not succeeded)
 
     # On episode termination
     if done:
