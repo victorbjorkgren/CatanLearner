@@ -6,10 +6,11 @@ from typing import Tuple, Optional
 import torch as T
 
 from Environment import Game
+from Learner.Loss import Loss
 from Learner.Nets import GameNet
 from Learner.PrioReplayBuffer import PrioReplayBuffer
 from Learner.Utils import TensorDeque, Transition, TensorUtils
-from Learner.constants import USE_ACTOR_PRIO
+from Learner.constants import USE_ACTOR_PRIO, GAMMA
 
 
 class Agent:
@@ -168,26 +169,26 @@ class Agent:
             lstm_cell = lstm_cell[:-1, 0, 0, :]
 
             if USE_ACTOR_PRIO:
-                raise NotImplementedError("Using prio actor is stale. Trade has not been implemented here")
-                # lstm_target_state = lstm_state[None, None, -1, :]
-                # lstm_target_cell = lstm_cell[None, None, -1, :]
-                #
-                # seq_len = T.tensor([state.shape[1]], dtype=T.long)
-                # titan_q_net = self.tracker_instance.get_titan().q_net
-                #
-                # td_error = Loss.get_td_error(
-                #     titan_q_net,
-                #     q,
-                #     state,
-                #     reward,
-                #     GAMMA,
-                #     None,
-                #     seq_len,
-                #     lstm_target_state,
-                #     lstm_target_cell,
-                #     T.tensor([done], dtype=T.bool),
-                #     T.tensor([i_am_player], dtype=T.long)
-                # )
+                # raise NotImplementedError("Using prio actor is stale. Trade has not been implemented here")
+                lstm_target_state = lstm_state[None, None, -1, :]
+                lstm_target_cell = lstm_cell[None, None, -1, :]
+
+                seq_len = T.tensor([state.shape[1]], dtype=T.long)
+                titan_q_net = self.tracker_instance.get_titan().q_net
+
+                td_error = Loss.get_td_error(
+                    titan_q_net,
+                    q,
+                    state,
+                    reward,
+                    GAMMA,
+                    None,
+                    seq_len,
+                    lstm_target_state,
+                    lstm_target_cell,
+                    T.tensor([done], dtype=T.bool),
+                    T.tensor([i_am_player], dtype=T.long)
+                )
             else:
                 td_error = T.tensor([1.], dtype=T.float)
 

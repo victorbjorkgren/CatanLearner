@@ -39,7 +39,7 @@ class Trainer:
         str_start = len("Q_Agent") + 1
         str_end = len(".pth")
         files = os.listdir('./PastTitans/')
-        checkpoints = [int(f[str_start:-str_end]) for f in files]
+        checkpoints = [int(f[str_start:-str_end]) for f in files] + [0]
         self.tick_iter = 1 + max(checkpoints)
 
     def tick(self):
@@ -111,14 +111,16 @@ class Trainer:
         nn.utils.clip_grad_norm_(self.q_net.parameters(), .5)
         self.optimizer.step()
 
-        # Sometimes print weight info
-        if self.tick_iter % 1000 == 0:
-            for name, module in self.q_net.named_modules():
-                if hasattr(module, 'weight') and module.weight is not None:
-                    weight_max = T.max(module.weight).item()
-                    grad_max = T.max(module.weight.grad).item()
-                    print(f"{name}: Max weight = {weight_max:.4e} - Max grad = {grad_max:.4e}")
-
+        try:
+            # Sometimes print weight info
+            if self.tick_iter % 1000 == 0:
+                for name, module in self.q_net.named_modules():
+                    if hasattr(module, 'weight') and module.weight is not None:
+                        weight_max = T.max(module.weight).item()
+                        grad_max = T.max(module.weight.grad).item()
+                        print(f"{name}: Max weight = {weight_max:.4e} - Max grad = {grad_max:.4e}")
+        except:
+            breakpoint()
         # Update others
         if self.tick_iter % 100 == 0:
             self.target_net.clone_state(self.q_net)

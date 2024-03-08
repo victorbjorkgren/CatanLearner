@@ -109,8 +109,8 @@ class PrioReplayBuffer:
         prob = self.data['prio'] / self.data['prio'].sum()
         try:
             sample_inds = np.random.choice(self._capacity, n, p=prob, replace=False)
-        except:
-            breakpoint()
+        except ValueError:
+            sample_inds = np.random.choice(self._capacity, n, replace=False)
 
         weights = (self._size * prob[sample_inds]) ** (-self._beta)
         weights = weights.clip(0, 1)

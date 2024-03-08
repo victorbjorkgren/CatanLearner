@@ -15,8 +15,8 @@ GAMMA = .99
 USE_ACTOR_PRIO = False
 EPS_MIN = .9
 EPS_MAX = .99
-EPS_ZERO = .1  # Chance that epsilon becomes zero
-EPS_ONE = .5  # Chance that epsilon becomes one
+EPS_ZERO = .3  # Chance that epsilon becomes zero
+EPS_ONE = .2  # Chance that epsilon becomes one
 
 # NETWORK
 N_POWER_LAYERS = 2
