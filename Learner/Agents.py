@@ -42,8 +42,8 @@ class Agent:
         self.has_won: bool = False
         self.episode_score: int = 0
         self.fail_count = 0
-        self.house_history = deque(maxlen=history_display)
         self.win_history = deque(maxlen=history_display)
+        self.score_history = deque(maxlen=history_display)
         self.beat_time = deque(maxlen=history_display)
 
     def __repr__(self):
@@ -58,6 +58,10 @@ class Agent:
             return reward_history.sum().item()  # / n
         else:
             return 0.
+
+    @property
+    def avg_score(self) -> float:
+        return round(sum(self.score_history) / max(len(self.score_history), 1), 1)
 
     @property
     def avg_beat_time(self) -> float:
@@ -159,6 +163,7 @@ class Agent:
             self.beat_time.append(self.game.turn)
         else:
             self.win_history.append(0)
+        self.score_history.append(self.game.players[i_am_player].points)
         self.has_won = False
 
         self.state_seq.clear()
@@ -352,7 +357,10 @@ class QAgent(Agent):
         if random() > self.epsilon:
             action, raw_action, was_trade = self.sample_random(i_am_player)
             if was_trade:
+                give_q = q_trade_mat[0, 0, 0, raw_action[0].long(), i_am_player]
+                get_q = q_trade_mat[0, 0, 1, raw_action[1].long(), i_am_player]
                 self._to_buffer(action=T.Tensor((action[1], action[2])))
+                self._to_buffer(q=give_q + get_q)
             else:
                 self._to_buffer(action=raw_action)
                 self._to_buffer(q=q_mat[0, 0, raw_action[0], raw_action[1], i_am_player])
@@ -376,10 +384,13 @@ class QAgent(Agent):
             self._to_buffer(action=T.tensor((73, 73)))
             self._to_buffer(was_trade=T.tensor([False], dtype=T.bool))
             return T.tensor((0, 0)), T.tensor((73, 73))
-        elif (trade_q > build_q) & (not self.game.first_turn):
+        elif (trade_q > build_q) & not_first_turn:
             give = T.argwhere(q_trade_mat[0] == q_trade_mat[0].max()).cpu()
             get = T.argwhere(q_trade_mat[1] == q_trade_mat[1].max()).cpu()
-            trade_action = T.tensor((give, get), dtype=T.float)
+            try:
+                trade_action = T.tensor((give, get), dtype=T.float)
+            except:
+                1
             self._to_buffer(q=trade_q)
             self._to_buffer(action=trade_action)
             self._to_buffer(was_trade=T.tensor([True], dtype=T.bool))
@@ -426,13 +437,13 @@ class QAgent(Agent):
         else:
             self.episode_state_action_cache[state_key].append((was_trade, action))
 
-    def _pull_cache(self, state_key: Tuple, q: T.Tensor, trade_q: T.Tensor) -> T.Tensor:
+    def _pull_cache(self, state_key: Tuple, q: T.Tensor, trade_q: T.Tensor) -> Tuple[T.Tensor, T.Tensor]:
         if state_key in self.episode_state_action_cache:
             cache_acts = self.episode_state_action_cache[state_key]
             for was_trade, act in cache_acts:
                 if was_trade:
+                    # Only make -inf for give resource. Errors are only in that aspect of the trade.
                     trade_q[0, act[0].long()] = -T.inf
-                    trade_q[1, act[1].long()] = -T.inf
                 else:
                     q[act[0], act[1]] = -T.inf
         return q, trade_q

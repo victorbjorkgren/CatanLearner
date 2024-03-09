@@ -1,6 +1,8 @@
 from collections import deque
 import threading
 
+# import torch
+from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
 from Environment import Game
@@ -11,10 +13,11 @@ from Learner.PrioReplayBuffer import PrioReplayBuffer
 from Learner.Trainer import Trainer
 from Learner.constants import *
 
+writer = SummaryWriter("RunLog")
 
 game = Game(
     n_players=N_PLAYERS,
-    max_turns=300
+    max_turns=MAX_TURNS
 )
 learner_net_init = {
     'game': game,
@@ -78,6 +81,8 @@ def learner_loop():
     while True:
         td_loss = trainer.tick()
         td_loss_hist.append(td_loss)
+        writer.add_scalar('TD Loss smooth', sum(td_loss_hist) / HISTORY_DISPLAY, trainer.tick_iter)
+        writer.add_scalar('TD Loss', td_loss, trainer.tick_iter)
 
 
 td_loss_hist = deque(maxlen=HISTORY_DISPLAY)
@@ -97,6 +102,12 @@ for i in iterator:
     if done:
         game.render(training_img=True)
         agent_tracker.update_elo()
+        writer.add_scalar('TitanLastScore', agent_tracker.get_titan().episode_score, game.episode)
+        writer.add_scalar('TitanAvgScore', agent_tracker.get_titan().avg_score, game.episode)
+        writer.add_scalar('RandomElo', agent_tracker.random_elo, game.episode)
+        writer.add_scalar('TitanElo', agent_tracker.titan_elo, game.episode)
+        writer.add_scalar('TitanBeatTime', agent_tracker.get_titan().avg_beat_time, game.episode)
+        writer.flush()
         for ii in range(N_PLAYERS):
             game.player_agents[ii].signal_episode_done(ii)
             game.player_agents[ii].clear_cache()
@@ -108,7 +119,10 @@ for i in iterator:
         f"Ep: {game.episode}-{int(game.turn)}, "
         f"TD Loss: {sum(td_loss_hist) / HISTORY_DISPLAY:.3e} (tick {trainer.tick_iter:d}), "
         f"Score: {[int(player.points) for player in game.players]}, "
+        f"ScoreHist: {[agent.avg_score for agent in game.player_agents]}, "
         f"WinHist: {[agent.sum_win for agent in game.player_agents]}, "
         f"AvgBeatTime: {[int(agent.avg_beat_time) for agent in game.player_agents]}, "
         f"Players: {[agent for agent in game.player_agents]}"
     )
+
+

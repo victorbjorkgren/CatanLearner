@@ -78,12 +78,12 @@ class PrioReplayBuffer:
             ) -> None:
 
         if self.is_full:
-            idx = self.min_prio_idx
-            if td_error.item() < self.data['prio'][idx]:
+            # idx = self.min_prio_idx
+            if td_error.item() < self.data['prio'][self.min_prio_idx]:
                 return
-        else:
-            idx = self._next_idx
-            self._next_idx = (idx + 1) % self._capacity
+        # else:
+        idx = self._next_idx
+        self._next_idx = (idx + 1) % self._capacity
 
         state = state.squeeze()
         reward = reward.squeeze()

@@ -15,7 +15,7 @@ from .constants import *
 
 
 class Game:
-    def __init__(self, n_players, failed_action_penalty=-.01, max_turns=500, max_no_progress=50, start_episode=0):
+    def __init__(self, n_players, failed_action_penalty=-.01, max_turns=500, max_no_progress=100, start_episode=0):
         self.max_no_progress = max_no_progress
         self.n_players = n_players
         self.max_turns = max_turns
