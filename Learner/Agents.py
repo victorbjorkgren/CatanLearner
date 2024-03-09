@@ -10,7 +10,7 @@ from Learner.Loss import Loss
 from Learner.Nets import GameNet
 from Learner.PrioReplayBuffer import PrioReplayBuffer
 from Learner.Utils import TensorDeque, Transition, TensorUtils
-from Learner.constants import USE_ACTOR_PRIO, GAMMA, FAILURE_ALLOWANCE
+from Learner.constants import USE_ACTOR_PRIO, GAMMA, FAILURE_ALLOWANCE, N_PLAYERS
 
 
 class Agent:
@@ -349,6 +349,10 @@ class QAgent(Agent):
         h0 = self.lstm_state_seq[-1]
         c0 = self.lstm_cell_seq[-1]
 
+        # Get masks
+        build_mask = ~state[:, :, :, -N_PLAYERS+i_am_player].bool()
+        tradeable = self.game.can_trade(i_am_player, 4)
+        trade_mask = ~T.isin(T.arange(5), tradeable)
         with T.no_grad():
             q_mat, q_trade_mat, hn, cn = self.q_net(state.unsqueeze(1), T.Tensor([1]), h0, c0)
             self._to_buffer(lstm_state=hn)
@@ -368,7 +372,11 @@ class QAgent(Agent):
             return action, raw_action
 
         pass_q = q_mat[0, 0, -1, -1, i_am_player]
+        q_mat[0, build_mask] = -T.inf
+
         q_trade_mat = q_trade_mat[0, 0, :, :, i_am_player]
+        q_trade_mat[0, 0, 0, :, i_am_player][trade_mask] = -T.inf
+
         q_mat = q_mat[0, 0, :54, :54, i_am_player]
         q_mat, q_trade_mat = self._pull_cache(state_key, q_mat, q_trade_mat)
 
