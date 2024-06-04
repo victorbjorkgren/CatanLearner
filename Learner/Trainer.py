@@ -96,7 +96,8 @@ class Trainer:
             player
         )
 
-        loss = (td_error * weights[:, None]).mean()  # + .001 * rule_break_loss
+        td_error = T.clamp(td_error, 0, 10)
+        loss = (td_error.clamp(0., 10.) * weights[:, None]).mean()  # + .001 * rule_break_loss
 
         self.optimizer.zero_grad()
         loss.backward()
