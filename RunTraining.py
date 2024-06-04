@@ -33,7 +33,7 @@ actor_net_init = {
     'n_embed': N_HIDDEN_NODES,
     'n_output': N_PLAYERS,
     'on_device': ACTOR_DEVICE,
-    'load_state': LOAD_Q_NET
+    'load_state': False
 }
 
 # learner_q_net = GameNet(learner_net_init).to(LEARNER_DEVICE)
@@ -97,63 +97,85 @@ agent_tracker = AgentTracker(
     eps_one=EPS_ONE
 )
 agent_tracker.register_agents(agent_list)
+agent_tracker.load_contestants()
 game.register_agents(agent_list)
 game.reset()
 
 
 def learner_loop():
-    while True:
+    while not stop_event.is_set():
         td_loss = trainer.tick()
         td_loss_hist.append(td_loss)
         writer.add_scalar('TD Loss smooth', sum(td_loss_hist) / HISTORY_DISPLAY, trainer.tick_iter)
         writer.add_scalar('TD Loss', td_loss, trainer.tick_iter)
 
 
+def actor_loop():
+    iterator = tqdm(range(MAX_STEPS))
+    for i in iterator:
+        if stop_event.is_set():
+            return
+        observation, obs_player = actor_net_list[0].get_dense(game)
+        action = game.current_agent.sample_action(observation, i_am_player=game.current_player)
+        reward, done, succeeded = game.step(action)
+        game.player_agents[obs_player].update_reward(reward, done, game, obs_player)
+        game.player_agents[obs_player].signal_failure(not succeeded)
+
+        # On episode termination
+        if done:
+            # game.render(training_img=True)
+            agent_tracker.update_elo()
+            titan = agent_tracker.get_titan()
+            # print(titan.episode_actions)
+            writer.add_scalar('TitanLastScore', titan.episode_score, game.episode)
+            writer.add_scalar('TitanAvgScore', titan.avg_score, game.episode)
+            # writer.add_scalar('RandomElo', agent_tracker.random_elo, game.episode)
+            # writer.add_scalar('TitanElo', agent_tracker.titan_elo, game.episode)
+            writer.add_scalar('TitanBeatTime', titan.avg_beat_time, game.episode)
+            # try:
+            #     writer.add_histogram('TitanActions', titan.episode_actions, game.episode, bins=range(3))
+            # except ValueError:
+            #     pass
+            writer.flush()
+            for ii in range(N_PLAYERS):
+                game.player_agents[ii].signal_episode_done(ii)
+                game.player_agents[ii].clear_cache()
+            agent_tracker.load_contestants('weighted')
+            agent_tracker.shuffle_agents()
+            game.reset()
+
+        iterator.set_postfix_str(
+            f"Ep: {game.episode}-{int(game.turn)}, "
+            f"TD Loss: {sum(td_loss_hist) / HISTORY_DISPLAY:.3e} (tick {trainer.tick_iter:d}), "
+            f"Score: {[int(player.points) for player in game.players]}, "
+            f"ScoreHist: {[agent.avg_score for agent in game.player_agents]}, "
+            f"WinHist: {[agent.sum_win for agent in game.player_agents]}, "
+            f"AvgBeatTime: {[int(agent.avg_beat_time) for agent in game.player_agents]}, "
+            f"Players: {[agent for agent in game.player_agents]}"
+        )
+    stop_event.set()
+
+
+def graceful_shutdown():
+    stop_event.set()
+    learner_thread.join()
+    actor_thread.join()
+
+
 td_loss_hist = deque(maxlen=HISTORY_DISPLAY)
 
-# learner_loop()
-learner_thread = threading.Thread(target=learner_loop)
-learner_thread.start()
+stop_event = threading.Event()
 
-iterator = tqdm(range(MAX_STEPS))
-for i in iterator:
-    observation, obs_player = actor_net_list[0].get_dense(game)
-    action = game.current_agent.sample_action(observation, i_am_player=game.current_player)
-    reward, done, succeeded = game.step(action)
-    game.player_agents[obs_player].update_reward(reward, done, game, obs_player)
-    game.player_agents[obs_player].signal_failure(not succeeded)
+try:
+    learner_thread = threading.Thread(target=learner_loop)
+    actor_thread = threading.Thread(target=actor_loop)
 
-    # On episode termination
-    if done:
-        game.render(training_img=True)
-        agent_tracker.update_elo()
-        titan = agent_tracker.get_titan()
-        print(titan.episode_actions)
-        writer.add_scalar('TitanLastScore', titan.episode_score, game.episode)
-        writer.add_scalar('TitanAvgScore', titan.avg_score, game.episode)
-        writer.add_scalar('RandomElo', agent_tracker.random_elo, game.episode)
-        writer.add_scalar('TitanElo', agent_tracker.titan_elo, game.episode)
-        writer.add_scalar('TitanBeatTime', titan.avg_beat_time, game.episode)
-        try:
-            writer.add_histogram('TitanActions', titan.episode_actions, game.episode, bins=range(3))
-        except ValueError:
-            pass
-        writer.flush()
-        for ii in range(N_PLAYERS):
-            game.player_agents[ii].signal_episode_done(ii)
-            game.player_agents[ii].clear_cache()
-        agent_tracker.load_contestants('weighted')
-        agent_tracker.shuffle_agents()
-        game.reset()
+    learner_thread.start()
+    actor_thread.start()
 
-    iterator.set_postfix_str(
-        f"Ep: {game.episode}-{int(game.turn)}, "
-        f"TD Loss: {sum(td_loss_hist) / HISTORY_DISPLAY:.3e} (tick {trainer.tick_iter:d}), "
-        f"Score: {[int(player.points) for player in game.players]}, "
-        f"ScoreHist: {[agent.avg_score for agent in game.player_agents]}, "
-        f"WinHist: {[agent.sum_win for agent in game.player_agents]}, "
-        f"AvgBeatTime: {[int(agent.avg_beat_time) for agent in game.player_agents]}, "
-        f"Players: {[agent for agent in game.player_agents]}"
-    )
-
-
+    learner_thread.join()
+    actor_thread.join()
+except KeyboardInterrupt:
+    print('Interrupted')
+finally:
+    graceful_shutdown()

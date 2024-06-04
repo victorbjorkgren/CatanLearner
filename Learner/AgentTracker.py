@@ -6,6 +6,7 @@ import random as r
 from typing import Optional, List
 
 from Learner.Agents import QAgent
+from Learner.Agents.PPOAgent import PPOAgent
 
 
 class AgentTracker:
@@ -21,8 +22,8 @@ class AgentTracker:
         self.has_loaded = False
 
         self.checkpoint_elo = None
-        self.titan_elo = 1000
-        self.random_elo = 1000
+        self.titan_elo = None
+        # self.random_elo = 1000
         self.best_elo = 0
         self.load_elo()
 
@@ -34,7 +35,6 @@ class AgentTracker:
             agent.tracker_instance = self
 
         self.set_titan()
-        self.load_contestants('weighted')
 
     def set_titan(self):
         assert self.has_agents
@@ -44,7 +44,18 @@ class AgentTracker:
             agent.unset_titan()
         self.agent_list[0].set_titan()
 
-    def load_contestants(self, method):
+    def init_past_titans(self):
+        assert self.has_titan
+        os.makedirs('./PastTitans/', exist_ok=True)
+        if len(os.listdir('./PastTitans/')) == 0:
+            agent: PPOAgent = self.get_titan()
+            agent.net.save(0)
+            self.checkpoint_elo['PPO_Agent_0.pth'] = 1000
+
+
+    def load_contestants(self, method=None):
+        if method is None:
+            method = 'random'
         assert method in ['random', 'weighted']
         assert self.checkpoint_elo is not None
         assert self.has_agents
@@ -52,7 +63,7 @@ class AgentTracker:
 
         self.has_loaded = True
 
-        os.makedirs('./PastTitans/', exist_ok=True)
+        self.init_past_titans()
         self.contestants = os.listdir('./PastTitans/')
         if len(self.contestants) == 0:
             method = 'random'
@@ -72,23 +83,24 @@ class AgentTracker:
         else:
             champions = self.match_making(len(self.agent_list))
 
-        epsilons = r.choices(
-            [0., r.uniform(self.eps_min, self.eps_max), 1.],
-            weights=[self.eps_zero, 1 - (self.eps_one + self.eps_zero), self.eps_one],
-            k=len(self.agent_list)
-        )
+        # epsilons = r.choices(
+        #     [0., r.uniform(self.eps_min, self.eps_max), 1.],
+        #     weights=[self.eps_zero, 1 - (self.eps_one + self.eps_zero), self.eps_one],
+        #     k=len(self.agent_list)
+        # )
 
         for i, agent in enumerate(self.agent_list):
-            if agent.is_titan:
-                elo = self.titan_elo
-            elif epsilons[i] == 0.:
-                elo = self.random_elo
-            elif champions[i] in self.checkpoint_elo:
+            # if agent.is_titan:
+            #     elo = self.titan_elo
+            # elif epsilons[i] == 0.:
+            #     elo = self.random_elo
+            if champions[i] in self.checkpoint_elo:
                 elo = self.checkpoint_elo[champions[i]]
             else:
-                print(f"Could not find ELO for agent {champions[i]}")
                 elo = 1000
-            agent.load_state(champions[i], epsilons[i], elo)
+                print(f'Could not find ELO for agent: "{champions[i]}" - Setting to {elo}')
+                self.checkpoint_elo[champions[i]] = elo
+            agent.load_state(champions[i], elo)
 
     def shuffle_agents(self):
         r.shuffle(self.agent_list)
@@ -109,12 +121,12 @@ class AgentTracker:
         n = len(self.agent_list)
         player_elo = []
         for agent in self.agent_list:
-            if agent.my_name in ['latest', 'Titan']:
-                player_elo.append(self.titan_elo)
-            elif agent.epsilon == 0.:
-                player_elo.append(self.random_elo)
-            else:
-                player_elo.append(self.checkpoint_elo[agent.my_name])
+            # if agent.my_name in ['latest', 'Titan']:
+            #     player_elo.append(self.titan_elo)
+            # elif agent.epsilon == 0.:
+            #     player_elo.append(self.random_elo)
+            # else:
+            player_elo.append(self.checkpoint_elo[agent.my_name])
         updated_elo = player_elo.copy()
 
         for i in range(n):
@@ -128,12 +140,12 @@ class AgentTracker:
         for i, agent in enumerate(self.agent_list):
             if updated_elo[i] > self.best_elo:
                 self.best_elo = updated_elo[i]
-            if agent.my_name in ['latest', 'Titan']:
-                self.titan_elo = updated_elo[i]
-            elif agent.my_name == 'Random':
-                self.random_elo = updated_elo[i]
-            else:
-                self.checkpoint_elo[agent.my_name] = updated_elo[i]
+            # if agent.my_name in ['latest', 'Titan']:
+            #     self.titan_elo = updated_elo[i]
+            # elif agent.my_name == 'Random':
+            #     self.random_elo = updated_elo[i]
+            # else:
+            self.checkpoint_elo[agent.my_name] = updated_elo[i]
 
         self.save_elo()
 
@@ -163,7 +175,7 @@ class AgentTracker:
         - A list of weights corresponding to each checkpoint.
         """
         assert self.checkpoint_elo is not None
-        assert self.best_elo > 0
+        # assert self.best_elo > 0
 
         elo_differences = np.array([self.best_elo - elo for elo in self.checkpoint_elo.values()])
         weights = self.gaussian_pdf(elo_differences, mu=0, sigma=sigma)

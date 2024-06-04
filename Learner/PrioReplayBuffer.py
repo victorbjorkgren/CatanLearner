@@ -18,6 +18,16 @@ def assert_capacity(n):
     assert isinstance(n, int) and n > 0 and n & (n - 1) == 0, "Value is not a power of 2"
 
 
+data_lock = threading.Lock()
+
+
+def synchronized(func):
+    def wrapper(*args, **kwargs):
+        with data_lock:
+            return func(*args, **kwargs)
+    return wrapper
+
+
 class PrioReplayBuffer:
     def __init__(self,
                  capacity: int,
@@ -167,6 +177,7 @@ class InMemBuffer(PrioReplayBuffer):
         # self._next_idx = self._size % self._capacity
         self.prios += self._max_priority ** self._alpha
 
+    @synchronized
     def sample(self, n):
         sample_inds, prob = self._sample_indices(n)
 
@@ -183,50 +194,17 @@ class InMemBuffer(PrioReplayBuffer):
 
         return samples
 
+    @synchronized
     def add(self,
             transition: Holders
-            # state: T.Tensor,
-            # action: T.Tensor,
-            # was_trade: T.Tensor,
-            # reward: T.Tensor,
-            # td_error: T.Tensor,
-            # lstm_state: T.Tensor,
-            # lstm_cell: T.Tensor,
-            # done: bool,
-            # episode: int,
-            # player: int
             ) -> None:
-        # if self.is_full:
-        #     # idx = self.min_prio_idx
-        #     if td_error.item() < self.data['prio'][self.min_prio_idx]:
-        #         return
-        # else:
-        # idx = self._next_idx
-        # self._next_idx = (idx + 1) % self._capacity
-
-        # state = state.squeeze()
-        # reward = reward.squeeze()
-        # was_trade = was_trade.squeeze()
-
-        # self.data['state'][idx, :len(state)] = state
-        # self.data['action'][idx, :len(action)] = action
-        # self.data['was_trade'][idx, :len(was_trade)] = was_trade
-        # self.data['reward'][idx, :len(reward)] = reward
-        # self.data['lstm_state'][idx, :len(lstm_state)] = lstm_state
-        # self.data['lstm_cell'][idx, :len(lstm_cell)] = lstm_cell
-        # self.data['seq_len'][idx] = len(state)
-        # self.data['done'][idx] = done
-        # self.data['episode'][idx] = episode
-        # self.data['player'][idx] = player
-        # self.data['prio'][idx] = min(td_error.item(), self._max_priority) ** self._alpha
-        #
-        # self._size = min(self._capacity, self._size + 1)
         self.data.append(transition)
         self.prios[:self.mem_size] = self._max_priority ** self._alpha
 
     @property
     def mem_size(self):
         return len(self.data)
+
 
 class OnDiskBuffer(PrioReplayBuffer):
     def __init__(self,

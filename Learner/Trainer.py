@@ -18,8 +18,8 @@ from Learner.constants import LOSS_CLIP, GRAD_CLIP
 
 
 class Trainer:
-    def __init__(self, buffer: PrioReplayBuffer, batch_size: int, gamma: float, net: GameNet):
-        self.name = 'Base_Agent'
+    def __init__(self, name: str, buffer: PrioReplayBuffer, batch_size: int, gamma: float, net: GameNet):
+        self.name = name
         self.buffer = buffer
         self.gamma = gamma
         self.batch_size = batch_size
@@ -43,9 +43,9 @@ class Trainer:
 
         td_loss = self.train()
 
-        if self.tick_iter % 100 == 0:
+        if self.tick_iter % 10 == 0:
             self.save('latest')
-        if self.tick_iter % 2000 == 0:
+        if self.tick_iter % 100 == 0:
             self.save('checkpoint')
 
         self.tick_iter += 1
@@ -57,7 +57,7 @@ class Trainer:
         str_end = len(".pth")
         os.makedirs('./PastTitans/', exist_ok=True)
         files = os.listdir('./PastTitans/')
-        checkpoints = [int(f[str_start:-str_end]) for f in files] + [0]
+        checkpoints = [int(f[str_start:-str_end]) for f in files] + [-1]
         self.tick_iter = 1 + max(checkpoints)
 
     def save(self, method):
@@ -187,11 +187,9 @@ class PPOTrainer(Trainer):
                  learning_rate: float,
                  reward_scale: float
                  ):
-        self.net: PPONet
-        super().__init__(buffer, batch_size, gamma, net)
-        self.name = 'PPO_Agent'
+        super().__init__('PPO_Agent', buffer, batch_size, gamma, net)
         self.reward_scale = reward_scale
-        self.optimizer = optim.Adam(self.net.parameters(), lr=learning_rate, weight_decay=1e-5)
+        self.optimizer = optim.AdamW(self.net.parameters(), lr=learning_rate, weight_decay=1e-5)
 
         self.clip_epsilon = LinearSchedule(
             begin_t=0,
@@ -257,4 +255,8 @@ class PPOTrainer(Trainer):
         # Negative sign to indicate we want to maximize the policy gradient objective function and entropy to encourage exploration
         loss = -(policy_loss + PPO_ENTROPY_COEF * entropy_loss) + PPO_VALUE_COEF * value_loss
 
-        return loss
+        self.optimizer.zero_grad()
+        loss.backward()
+        self.optimizer.step()
+
+        return loss.item()

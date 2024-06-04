@@ -1,4 +1,5 @@
 import os
+import threading
 from abc import abstractmethod
 from collections import namedtuple
 from datetime import datetime
@@ -18,6 +19,15 @@ from Learner.Utility.DataTypes import PPOTransition, NetInput
 from Learner.Utility.Utils import TensorUtils
 from Learner.Layers import MLP, PowerfulLayer, MultiHeadAttention
 
+file_lock = threading.Lock()
+
+
+def synchronized(func):
+    def wrapper(*args, **kwargs):
+        with file_lock:
+            return func(*args, **kwargs)
+    return wrapper
+
 
 class BaseNet(nn.Module):
     def __init__(self, name):
@@ -27,19 +37,21 @@ class BaseNet(nn.Module):
     def clone_state(self, other):
         self.load_state_dict(other.state_dict(), strict=False)
 
+    @synchronized
     def save(self, suffix):
         if suffix == 'latest':
             torch.save(self.state_dict(), f'./{self.name}_Agent_Titan.pth')
+        else:
+            os.makedirs('./PastTitans/', exist_ok=True)
+            torch.save(self.state_dict(), f'./PastTitans/{self.name}_Agent_{suffix}.pth')
 
             # Create BackUp
             now = datetime.now()
             now = now.strftime("%Y%m%d_%H%M%S")
             os.makedirs('./NetBackup/', exist_ok=True)
             torch.save(self.state_dict(), f'./NetBackup/{self.name}_state_{now}.pth')
-        else:
-            os.makedirs('./PastTitans/', exist_ok=True)
-            torch.save(self.state_dict(), f'./PastTitans/{self.name}_Agent_{suffix}.pth')
 
+    @synchronized
     def load(self, file: str | int):
         if file == 'latest':
             dir = './'
@@ -50,7 +62,8 @@ class BaseNet(nn.Module):
         try:
             self.load_state_dict(torch.load(path), strict=False)
         except FileNotFoundError:
-            print(f'Could not find {file}')
+            print(f'Could not find {file} - saving with fresh weights')
+            torch.save(self.state_dict(), path)
 
 
 
@@ -344,8 +357,8 @@ class GameNet(BaseNet):
 
         self._core_net = CoreNet(net_config, batch_size, undirected_faces)
 
-        if self.config['load_state']:
-            self.load('latest')
+        # if self.config['load_state']:
+        #     self.load('latest')
 
     def get_dense(self, game):
         return self._core_net.get_dense(game)

@@ -42,7 +42,8 @@ class PPOAgent(BaseAgent):
     def sample_action(self, state: T.Tensor, i_am_player: int) -> BaseAction:
         state_key = TensorUtils.get_cache_key(state)
 
-        self.game_state_buffer.append(GameState(state))
+        if self.my_name in ['Titan', 'latest']:
+            self.game_state_buffer.append(GameState(state))
 
         ht, ct = self.h0, self.c0
 
@@ -84,7 +85,8 @@ class PPOAgent(BaseAgent):
         logprob = sampler.log_prob(action).unsqueeze(0)
         value = net_out.state_value[0, 0, i_am_player].unsqueeze(0)
 
-        self.action_pack_buffer.append(PPOActionPack(action, logprob, value, ht, ct))
+        if self.my_name in ['Titan', 'latest']:
+            self.action_pack_buffer.append(PPOActionPack(action, logprob, value, ht, ct))
         return action
 
     def signal_episode_done(self, i_am_player: int) -> None:
@@ -99,6 +101,8 @@ class PPOAgent(BaseAgent):
         pass
 
     def _flush_buffer(self, done: bool, i_am_player: int, force: bool = False) -> None:
+        if self.my_name not in ['Titan', 'latest']:
+            return
         assert len(self.action_pack_buffer) == len(self.reward_buffer) == len(self.game_state_buffer)
         has_length = len(self.reward_buffer) >= (self.max_seq_length - self.burn_in_length)
         time_to_flush = self.ticks_since_flush > 0
@@ -114,6 +118,10 @@ class PPOAgent(BaseAgent):
             self.ticks_since_flush = randint(-expected_length, -(expected_length // 3))
 
     def update_reward(self, reward: float, done: bool, game: Game, i_am_player: int) -> None:
+        if reward > 0.:
+            self.episode_score += 1
+        if self.my_name not in ['Titan', 'latest']:
+            return
         rew_pack = PPORewardPack(
             T.tensor([reward]),
             T.tensor([game.episode]),

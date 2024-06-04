@@ -66,23 +66,24 @@ class BaseAgent:
     def update_reward(self, reward: float, done: bool, game, i_am_player: int) -> None:
         raise NotImplementedError
 
-    def load_state(self, suffix, epsilon, elo):
+    def load_state(self, suffix, elo):
         if self.is_titan:
             self.net.load('latest')
-            self.epsilon = 1.
+            # self.epsilon = 1.
             self.my_suffix = f'Titan ({int(elo)})'
-            self.my_name = 'Titan'
-        elif (epsilon == 0.) | (suffix == 'Random'):
-            self.my_name = 'Random'
-            self.my_suffix = f'Random ({int(elo)})'
-            self.epsilon = 0.
+            self.my_name = 'latest'
+        # elif (epsilon == 0.) | (suffix == 'Random'):
+        #     self.my_name = 'Random'
+        #     self.my_suffix = f'Random ({int(elo)})'
+        #     self.epsilon = 0.
         else:
             self.net.load(suffix)
             self.my_name = suffix
-            self.epsilon = epsilon
+            # self.epsilon = epsilon
             str_start = len(self.name) + 1
             str_end = len(".pth")
-            self.my_suffix = f"{suffix[str_start: -str_end]}_{epsilon:.2f} ({int(elo)})"
+            # self.my_suffix = f"{suffix[str_start: -str_end]}_{epsilon:.2f} ({int(elo)})"
+            self.my_suffix = f"{suffix[str_start: -str_end]} ({int(elo)})"
 
     def register_action(self, action: int) -> None:
         if action == 0:
