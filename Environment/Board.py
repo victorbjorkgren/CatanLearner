@@ -3,6 +3,7 @@ from torch_geometric.utils.convert import from_networkx
 import torch_geometric.data as pyg_data
 
 from HexGrid.HexGrid import make_hex_grid
+from Learner.Utils import pairwise_isin
 
 from .constants import *
 
@@ -193,11 +194,14 @@ class Board:
             house_edges = T.isin(self.state.edge_index, houses).any(0)
             return self.state.edge_index[:, house_edges]
 
-        road_inds = self.state.edge_attr.nonzero()[:, player]
-        available_roads = self.state.edge_index[:, road_inds]
-        connected_roads = T.isin(self.state.edge_index, available_roads).any(0)
+        all_road_inds = self.state.edge_attr.nonzero()
+        player_road_inds = all_road_inds[all_road_inds[:, 1] == player, 0]
+        player_road_nodes = self.state.edge_index[:, player_road_inds].unique()
+        all_road_inds = all_road_inds[:, 0]
+        all_roads = self.state.edge_index[:, all_road_inds]
+        connected_roads = T.isin(self.state.edge_index, player_road_nodes).any(0)
         connected_roads = self.state.edge_index[:, connected_roads]
-        already_built = T.isin(connected_roads, available_roads).all(0)
+        already_built = pairwise_isin(connected_roads, all_roads)
 
         return connected_roads[:, ~already_built]
 

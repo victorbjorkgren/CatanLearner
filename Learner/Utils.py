@@ -3,8 +3,6 @@ from typing import Tuple
 
 import torch as T
 
-from Environment import Game
-
 
 class TensorDeque:
     def __init__(
@@ -112,18 +110,6 @@ class Transition:
     lstm_cell: T.Tensor | None = None
 
 
-def extract_attr(game: Game):
-    node_x = game.board.state.x.clone()
-    edge_x = game.board.state.edge_attr.clone()
-    face_x = game.board.state.face_attr.clone()
-
-    player_states = T.cat([ps.state.clone()[None, :] for ps in game.players], dim=1)
-    node_x = T.cat((node_x, player_states.repeat((node_x.shape[0], 1))), dim=1)
-    edge_x = T.cat((edge_x, player_states.repeat((edge_x.shape[0], 1))), dim=1)
-
-    return node_x, edge_x, face_x
-
-
 def sparse_face_matrix(face_index, to_undirected):
     n = face_index.size(0)  # Number of faces
     num_nodes_per_face = face_index.size(1)  # Should be 6
@@ -167,3 +153,21 @@ def get_dense_masks(game, i_am_player):
 
 def get_cache_key(tensor: T.Tensor) -> Tuple:
     return tuple(tensor.numpy().flatten())
+
+
+def pairwise_isin(tensor_a: T.Tensor, tensor_b: T.Tensor) -> T.Tensor:
+    # Step 1: Broadcasting and Comparison
+    # We want each pair in tensor_a (2, N) to compare against every pair in tensor_b (2, M)
+    # So, we reshape tensor_a to (2, N, 1) and tensor_b to (2, 1, M) to prepare for broadcasting
+    tensor_a_exp = tensor_a.unsqueeze(2)  # Shape becomes (2, N, 1)
+    tensor_b_exp = tensor_b.unsqueeze(1)  # Shape becomes (2, 1, M)
+    # Now, perform element-wise comparison
+    comparison = tensor_a_exp == tensor_b_exp  # Shape will be (2, N, M) after broadcasting
+    # Step 2: Logical AND Operation
+    # Check if both elements of a pair match
+    pair_matches = comparison.all(dim=0)  # Collapse along the pair dimension, shape becomes (N, M)
+    # Step 3: Aggregation
+    # Determine if each pair in tensor_a matches with any pair in tensor_b
+    matches = pair_matches.any(dim=1)  # Check along M dimension for any True values, shape becomes (N,)
+
+    return matches
