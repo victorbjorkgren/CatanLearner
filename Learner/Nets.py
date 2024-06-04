@@ -105,19 +105,20 @@ class GameNet(nn.Module):
         ])
 
     def forward(self, observation):
-        obs_matrix = self.state_matrix.clone()
+        batch = observation.shape[0]
+        obs_matrix = self.state_matrix.clone().repeat((batch, 1, 1, 1))
 
-        obs_matrix[self.node_mask] = self.node_embed(observation[self.node_mask])
-        obs_matrix[self.edge_mask] = self.edge_embed(observation[self.edge_mask])
-        obs_matrix[self.face_mask] = self.face_embed(observation[self.face_mask][:, :6])
+        obs_matrix[self.node_mask.repeat((batch, 1, 1))] = self.node_embed(observation[self.node_mask.repeat((batch, 1, 1))])
+        obs_matrix[self.edge_mask.repeat((batch, 1, 1))] = self.edge_embed(observation[self.edge_mask.repeat((batch, 1, 1))])
+        obs_matrix[self.face_mask.repeat((batch, 1, 1))] = self.face_embed(observation[self.face_mask.repeat((batch, 1, 1))][:, :6])
 
         obs_matrix = self.power_layers(obs_matrix)
 
-        action_matrix = self.out_matrix.clone()
-        state_matrix = self.out_matrix.clone()
+        action_matrix = self.out_matrix.clone().repeat((batch, 1, 1, 1))
+        state_matrix = self.out_matrix.clone().repeat((batch, 1, 1, 1))
 
-        action_matrix[self.full_mask] = self.action_value(obs_matrix[self.full_mask])
-        state_matrix[self.full_mask] = self.state_value(obs_matrix[self.full_mask])
+        action_matrix[self.full_mask.repeat((batch, 1, 1))] = self.action_value(obs_matrix[self.full_mask.repeat((batch, 1, 1))])
+        state_matrix[self.full_mask.repeat((batch, 1, 1))] = self.state_value(obs_matrix[self.full_mask.repeat((batch, 1, 1))])
 
         return action_matrix + state_matrix - action_matrix.mean(dim=-1, keepdim=True)
 

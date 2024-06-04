@@ -1,3 +1,5 @@
+from typing import Any
+
 import torch as T
 from torch_geometric.utils.convert import from_networkx
 import torch_geometric.data as pyg_data
@@ -100,20 +102,20 @@ class Board:
         self.state.edge_attr[uv_indices, player] = 1
         self.state.edge_attr[vu_indices, player] = 1
 
-    def can_build_village(self, node_id: int | T.Tensor, player: int, first_turn: bool = False) -> bool:
+    def can_build_village(self, node_id: int | T.Tensor, player: int, first_turn: bool = False) -> tuple[bool, T.Tensor]:
         if isinstance(node_id, T.Tensor):
             node_id = node_id.item()
-        try:
-            adj_mask = (self.state.edge_index == node_id).any(0)
-        except:
-            breakpoint()
+        adj_mask = (self.state.edge_index == node_id).any(0)
         edges_adj = self.state.edge_index[:, adj_mask]
         neighborhood_nodes = edges_adj.unique()
         adjacent_nodes = neighborhood_nodes[neighborhood_nodes != node_id]
 
         roads = self.state.edge_attr[adj_mask, player].nonzero().numel()
         adjacent_buildings = self.state.x[adjacent_nodes, :].nonzero().numel()
-        my_buildings = self.state.x[node_id, player]
+        try:
+            my_buildings = self.state.x[node_id, player]
+        except:
+            breakpoint()
         other_players_buildings = (self.state.x[node_id, :].sum() - my_buildings)
 
         is_free = (adjacent_buildings == 0) & (other_players_buildings == 0) & (my_buildings < 2)
