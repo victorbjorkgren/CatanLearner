@@ -4,7 +4,13 @@ import torch.nn.functional as F
 
 
 class MLP(nn.Module):
-    def __init__(self, in_features: int, out_features: int, final: bool = False, feature_dim: int = -1) -> None:
+    def __init__(self,
+                 in_features: int,
+                 out_features: int,
+                 final: bool = False,
+                 feature_dim: int = -1,
+                 residual: bool = False
+                 ) -> None:
         super(MLP, self).__init__()
         self.final = final
         assert feature_dim in [-1, 1]
@@ -13,6 +19,7 @@ class MLP(nn.Module):
         self.l1 = nn.Linear(in_features, hidden)
         self.l2 = nn.Linear(hidden, out_features)
         self.act = nn.LeakyReLU(.01)
+        self.residual = residual
 
         if self.final:
             self.mlp = nn.Sequential(*[
@@ -30,12 +37,14 @@ class MLP(nn.Module):
 
     def forward(self, x: T.Tensor) -> T.Tensor:
         if self.feature_dim == 1:
-            x = x.permute(0, 2, 1)
-            x = self.mlp(x)
-            x = x.permute(0, 2, 1)
+            out = x.permute(0, 2, 1)
+            out = self.mlp(out)
+            out = out.permute(0, 2, 1)
         else:
-            x = self.mlp(x)
-        return x
+            out = self.mlp(x)
+        if self.residual:
+            out = out + x
+        return out
 
 
 def norm(adj):
