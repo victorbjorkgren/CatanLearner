@@ -128,6 +128,8 @@ class AgentTracker:
                 self.best_elo = updated_elo[i]
             if agent.my_name in ['latest', 'Titan']:
                 self.titan_elo = updated_elo[i]
+            elif agent.my_name == 'Random':
+                self.random_elo = updated_elo[i]
             else:
                 self.checkpoint_elo[agent.my_name] = updated_elo[i]
 
