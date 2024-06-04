@@ -13,6 +13,7 @@ GAMMA = .99
 
 # ACTORS
 USE_ACTOR_PRIO = False
+FAILURE_ALLOWANCE = 2
 EPS_MIN = .9
 EPS_MAX = .99
 EPS_ZERO = .3  # Chance that epsilon becomes zero
