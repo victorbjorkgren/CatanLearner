@@ -21,9 +21,9 @@ class Board:
     Face states: one hot encoded with dice number as value. Bandit is 1|0
     [Bandit, Brick, Grain, Ore, Lumber, Wool]
     Edge states: Has road or not
-    [me, enemy0, ..., enemyK]
+    [player 0, player 1, ..., player k]
     Node states: village = 1, town = 2
-    [me, enemy0, ..., enemyK]
+    [player 0, player 1, ..., player k]
     """
     def __init__(self, n_players):
         self.n_players = n_players
@@ -157,6 +157,7 @@ class Board:
         if first_turn:
             has_connection = (self.state.x[u, player] > 0) | (self.state.x[v, player] > 0)
         else:
+            # TODO: Seems to let player build from other player's roads
             has_connection = edge_value_neighbor.nonzero().numel() > 0
 
         return is_free & has_connection
