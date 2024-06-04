@@ -159,7 +159,7 @@ def preprocess_adj(adj, batch_size, add_self_loops):
     return adj_normalized.repeat((batch_size, 1, 1))
 
 
-def get_masks(game, i_am_player):
+def get_dense_masks(game, i_am_player):
     road_mask = game.board.get_road_mask(i_am_player, game.players[i_am_player].hand, game.first_turn)
     village_mask = game.board.get_village_mask(i_am_player, game.players[i_am_player].hand, game.first_turn)
     return road_mask, village_mask

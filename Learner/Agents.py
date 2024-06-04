@@ -8,7 +8,7 @@ import torch as T
 from Environment import Game
 from Learner.Nets import GameNet
 from Learner.PrioReplayBuffer import PrioReplayBuffer
-from Learner.Utils import get_masks, get_cache_key, TensorDeque, Transition
+from Learner.Utils import get_cache_key, TensorDeque, Transition
 
 
 class BaseAgent(PrioReplayBuffer):
@@ -137,50 +137,44 @@ class RandomAgent(BaseAgent):
         return "RandomAgent"
 
     def sample_action(self, state: T.Tensor, i_am_player: int) -> tuple[T.Tensor, T.Tensor]:
-        road_mask, village_mask = get_masks(self.game, i_am_player)
-
         self._to_buffer(state=state)
         self._to_buffer(lstm_state=T.zeros((1, 1, 32), dtype=T.float))
         self._to_buffer(lstm_cell=T.zeros((1, 1, 32), dtype=T.float))
 
         if self.game.first_turn:
             if self.game.first_turn_village_switch:
-                index = self._sample_village(village_mask)
-                if index is None:
-                    raise IndexError("No index returned from sampled village")
-                self._to_buffer(action=T.tensor((index, index)))
-                return T.tensor((2, index)), T.tensor((index, index))
+                action_type = 2
             else:
-                index = self._sample_road(road_mask)
-                self._to_buffer(action=self.game.board.state.edge_index[:, index].squeeze())
-                return T.tensor((1, index)), self.game.board.state.edge_index[:, index]
-
-        action_type = randint(0, 2)
+                action_type = 1
+        else:
+            action_type = randint(0, 2)
 
         if action_type == 0:
             self._to_buffer(action=T.tensor((73, 73)))
             return T.tensor((0, 0)), T.tensor((73, 73))
 
         elif action_type == 1:
-            if road_mask.sum() > 0:
-                available_roads = road_mask.argwhere().squeeze()
-                if road_mask.sum() == 1:
-                    index = available_roads.item()
-                else:
-                    index = available_roads[T.randint(0, len(available_roads), (1,))]
-                self._to_buffer(action=self.game.board.state.edge_index[:, index].squeeze())
-                return T.tensor((1, index)), self.game.board.state.edge_index[:, index]
+            road_mask = self.game.board.sparse_road_mask(
+                i_am_player,
+                self.game.players[i_am_player].hand,
+                self.game.first_turn
+            )
+            if road_mask.numel() > 0:
+                index, raw_index = self._sample_road(road_mask)
+                self._to_buffer(action=raw_index)
+                return T.tensor((1, index)), raw_index
             else:
                 self._to_buffer(action=T.tensor((73, 73)))
                 return T.tensor((0, 0)), T.tensor((73, 73))
 
         elif action_type == 2:
-            if village_mask.sum() > 0:
-                available_villages = village_mask.argwhere().squeeze()
-                if village_mask.sum() == 1:
-                    index = available_villages.item()
-                else:
-                    index = available_villages[T.randint(0, len(available_villages), (1,))]
+            village_mask = self.game.board.sparse_village_mask(
+                i_am_player,
+                self.game.players[i_am_player].hand,
+                self.game.first_turn
+            )
+            if village_mask.numel() > 0:
+                index = self._sample_village(village_mask)
                 self._to_buffer(action=T.tensor((index, index)))
                 return T.tensor((action_type, index)), T.tensor((index, index))
             else:
@@ -194,25 +188,27 @@ class RandomAgent(BaseAgent):
 
     @staticmethod
     def _sample_village(village_mask) -> int:
-        if village_mask.sum() > 0:
-            available_villages = village_mask.argwhere().squeeze()
-            if village_mask.sum() == 1:
-                index = available_villages.item()
+        if village_mask.numel() > 0:
+            # available_villages = village_mask.argwhere().squeeze()
+            if village_mask.numel() == 1:
+                return village_mask.item()
             else:
-                index = available_villages[T.randint(0, len(available_villages), (1,))]
-            return index
+                return village_mask[T.randint(0, village_mask.shape[0], (1,))]
         else:
             raise RuntimeError("Random Agent could not find house on round 1")
 
-    @staticmethod
-    def _sample_road(road_mask) -> int:
-        if road_mask.sum() > 0:
-            available_roads = road_mask.argwhere().squeeze()
-            if road_mask.sum() == 1:
-                index = available_roads.item()
+    def _sample_road(self, road_mask: T.Tensor) -> Tuple[int, T.Tensor]:
+        if road_mask.numel() > 0:
+            # available_roads = road_mask.argwhere().squeeze()
+            if road_mask.numel() == 2:
+                index = road_mask
             else:
-                index = available_roads[T.randint(0, len(available_roads), (1,))]
-            return index
+                index = road_mask[:, T.randint(0, road_mask.shape[1], (1,))]
+            edge_index = (
+                    (self.game.board.state.edge_index[0, :] == index[0, :])
+                    & (self.game.board.state.edge_index[1, :] == index[1, :])
+            ).nonzero()
+            return edge_index.item(), index.squeeze()
         else:
             raise RuntimeError("Random Agent could not find road on round 1")
 

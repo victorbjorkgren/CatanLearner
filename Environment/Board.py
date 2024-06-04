@@ -9,6 +9,7 @@ from .constants import *
 
 class ExtendedData(pyg_data.Data):
     """Extend PyG Data object to include faces"""
+
     def __init__(self, edge_index=None, x=None, pos=None, edge_attr=None, face_index=None, face_attr=None):
         super(ExtendedData, self).__init__(edge_index=edge_index, x=x, pos=pos, edge_attr=edge_attr)
         self.face_index = face_index
@@ -25,6 +26,7 @@ class Board:
     Node states: village = 1, town = 2
     [player 0, player 1, ..., player k]
     """
+
     def __init__(self, n_players):
         self.n_players = n_players
 
@@ -107,6 +109,8 @@ class Board:
                           ) -> tuple[bool, T.Tensor]:
         if isinstance(node_id, T.Tensor):
             node_id = node_id.item()
+
+        # self.update_adj_mask()
         adj_mask = (self.state.edge_index == node_id).any(0)
         edges_adj = self.state.edge_index[:, adj_mask]
         neighborhood_nodes = edges_adj.unique()
@@ -122,8 +126,47 @@ class Board:
 
         return is_free & (has_connection | first_turn), my_buildings
 
+    def sparse_village_mask(self, player, hand, first_turn=False):
+        if first_turn:
+            has_road = T.arange(self.state.num_nodes)
+        else:
+            has_road = self.state.edge_attr[:, player] > 0
+            has_road = self.state.edge_index[:, has_road].unique()
+
+        if has_road.numel() == 0:
+            return has_road
+
+        can_afford_small = (hand >= T.tensor([1, 1, 0, 1, 1])).all()
+        can_afford_large = (hand >= T.tensor([0, 2, 3, 0, 0])).all()
+
+        if (not can_afford_small) and (not can_afford_large):
+            return T.tensor([])
+
+        can_afford_small = can_afford_small & (self.state.x[has_road, player] == 0)
+        can_afford_large = can_afford_large & (self.state.x[has_road, player] == 1)
+        can_afford = can_afford_small | can_afford_large
+
+        has_road = has_road[can_afford]
+        if has_road.numel() == 0:
+            return has_road
+
+        not_occupied = self.state.x[has_road, :player].sum(1)
+        not_occupied += self.state.x[has_road, player+1:].sum(1)
+        not_occupied = not_occupied == 0
+
+        has_road = has_road[not_occupied]
+        if has_road.numel() == 0:
+            return T.tensor([])
+
+        no_adj = self.state.x.nonzero()[:, 0]
+        no_adj = T.isin(self.state.edge_index[0, :], no_adj)
+        no_adj = self.state.edge_index[1, no_adj]
+        no_adj = ~T.isin(has_road, no_adj)
+
+        return has_road[no_adj]
+
     def get_village_mask(self, player, hand, first_turn=False) -> T.Tensor:
-        mask = T.zeros((self.state.num_nodes, ), dtype=T.bool)
+        mask = T.zeros((self.state.num_nodes,), dtype=T.bool)
         for node_id in range(self.state.num_nodes):
             can_build, size = self.can_build_village(node_id, player, first_turn)
             if can_build & (size == 0) & (hand >= T.tensor([1, 1, 0, 1, 1])).all():
@@ -140,6 +183,22 @@ class Board:
             can_build = self.can_build_road(edge_id, player, first_turn)
             mask[edge_id] = can_build
         return mask
+
+    def sparse_road_mask(self, player, hand, first_turn=False) -> T.Tensor:
+        if (hand < T.tensor([1, 0, 0, 1, 0])).any():
+            return T.tensor([])
+        if first_turn:
+            houses = self.state.x.nonzero()[:, player]
+            house_edges = T.isin(self.state.edge_index, houses).any(0)
+            return self.state.edge_index[:, house_edges]
+
+        road_inds = self.state.edge_attr.nonzero()[:, player]
+        available_roads = self.state.edge_index[:, road_inds]
+        connected_roads = T.isin(self.state.edge_index, available_roads).any(0)
+        connected_roads = self.state.edge_index[:, connected_roads]
+        already_built = T.isin(connected_roads, available_roads).all(0)
+
+        return connected_roads[:, ~already_built]
 
     def can_build_road(self, edge_id, player, first_turn=False):
         edge_index = self.state.edge_index
