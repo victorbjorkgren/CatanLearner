@@ -8,7 +8,7 @@ import Learner.Nets
 from Learner.Utils import get_masks
 
 
-class Agent:
+class BaseAgent:
     def __init__(self):
         pass
 
@@ -21,8 +21,11 @@ class Agent:
     def sample_road(self, game, road_mask, i_am_player):
         pass
 
+    def __repr__(self):
+        return "BaseAgent"
 
-class RandomAgent(Agent):
+
+class RandomAgent(BaseAgent):
     def __init__(self):
         super().__init__()
 
@@ -41,7 +44,10 @@ class RandomAgent(Agent):
 
         action_type = randint(0, 2)
 
-        if action_type == 1:
+        if action_type == 0:
+            return T.tensor((0, 0)), T.tensor((73, 73))
+
+        elif action_type == 1:
             if road_mask.sum() > 0:
                 available_roads = road_mask.argwhere().squeeze()
                 if road_mask.sum() == 1:
@@ -50,7 +56,7 @@ class RandomAgent(Agent):
                     index = available_roads[T.randint(0, len(available_roads), (1,))]
                 return T.tensor((1, index)), game.board.state.edge_index[:, index]
             else:
-                return T.tensor((0, 0)), T.tensor((74, 74))
+                return T.tensor((0, 0)), T.tensor((73, 73))
 
         elif action_type == 2:
             if village_mask.sum() > 0:
@@ -61,7 +67,7 @@ class RandomAgent(Agent):
                     index = available_villages[T.randint(0, len(available_villages), (1,))]
                 return T.tensor((action_type, index)), T.tensor((index, index))
             else:
-                return T.tensor((0, 0)), T.tensor((74, 74))
+                return T.tensor((0, 0)), T.tensor((73, 73))
         else:
             Exception("Random Agent chose illegal action")
 
@@ -89,12 +95,15 @@ class RandomAgent(Agent):
         else:
             Exception("Random Agent could not find road on round 1")
 
+    def __repr__(self):
+        return "RandomAgent"
 
-class QAgent(Agent):
+
+class QAgent(BaseAgent):
     def __init__(self, q_net: Learner.Nets.GameNet, game):
         super().__init__()
         self.q_net = q_net
-        self.sparse_edge = game.board.state.edge_index
+        self.sparse_edge = game.board.state.edge_index.clone()
         self.empty_edge = T.zeros((self.sparse_edge.shape[1],), dtype=T.bool)
         self.empty_node = T.zeros((54,), dtype=T.bool)
 
@@ -103,32 +112,33 @@ class QAgent(Agent):
 
         road_mask, village_mask = get_masks(game, i_am_player)
 
-        # if game.first_turn:
-        #     if game.first_turn_village_switch:
-        #         return 2, self.sample_village(game, village_mask, i_am_player)
-        #     else:
-        #         return 1, self.sample_road(game, road_mask, i_am_player)
+        if game.first_turn:
+            if game.first_turn_village_switch:
+                road_mask = self.empty_edge
+            else:
+                village_mask = self.empty_node
+
 
         mask = self.mask_to_dense(road_mask, village_mask)
 
-        # TODO: Find root cause
+        # TODO: Find root cause of over sized mask
         if len(mask.shape) == 3:
             mask = mask.squeeze()
 
         if mask.sum() == 0:
-            return T.tensor((0, 0)), T.tensor((74, 74))
+            return T.tensor((0, 0)), T.tensor((73, 73))
         with T.no_grad():
             q = self.q_net(state).detach()
-
+        # TODO: Check why da fuq the agent doesn't build houses
         pass_q = q[0, -1, -1, i_am_player]
         q = q[0, :54, :54, i_am_player]
         q[~mask] = -T.inf
         build_q = q.max()
 
         if (pass_q > build_q) & (not game.first_turn):
-            return T.tensor((0, 0)), T.tensor((74, 74))
+            return T.tensor((0, 0)), T.tensor((73, 73))
 
-        build_action = T.argwhere(q == build_q)
+        build_action = T.argwhere(q == build_q).cpu()
         if build_action.shape[0] > 1:
             build_action = build_action[T.randint(0, build_action.shape[0], (1,))].squeeze()
         elif build_action.shape[0] == 1:
@@ -187,4 +197,7 @@ class QAgent(Agent):
             road_mask = pyg.utils.to_dense_adj(self.sparse_edge[:, road_mask],
                                                max_num_nodes=village_mask.shape[-1]).bool()
         return village_mask + road_mask
+
+    def __repr__(self):
+        return "QAgent"
 

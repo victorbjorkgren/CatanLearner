@@ -2,11 +2,11 @@ import torch as T
 
 
 def extract_attr(game):
-    node_x = game.board.state.x
-    edge_x = game.board.state.edge_attr
-    face_x = game.board.state.face_attr
+    node_x = game.board.state.x.clone()
+    edge_x = game.board.state.edge_attr.clone()
+    face_x = game.board.state.face_attr.clone()
 
-    player_states = T.cat([ps.state[None, :] for ps in game.players], dim=1)
+    player_states = T.cat([ps.state.clone()[None, :] for ps in game.players], dim=1)
     node_x = T.cat((node_x, player_states.repeat((node_x.shape[0], 1))), dim=1)
     edge_x = T.cat((edge_x, player_states.repeat((edge_x.shape[0], 1))), dim=1)
 
@@ -21,7 +21,7 @@ def sparse_face_matrix(face_index, to_undirected):
     node_indices = face_index.flatten()
 
     # Create the [2, K] matrix by stacking face_indices and node_indices
-    connections = T.stack([face_indices, node_indices], dim=0)
+    connections = T.stack([node_indices, face_indices], dim=0)
 
     if to_undirected:
         connections = T.cat((connections, connections.flip(0)), dim=1)
@@ -30,7 +30,7 @@ def sparse_face_matrix(face_index, to_undirected):
 
 def sparse_misc_node(node_n, misc_n):
     node_range = T.arange(node_n + 1)
-    sparse = T.stack((node_range, T.full_like(node_range, misc_n)), dim=0)
+    sparse = T.stack((T.full_like(node_range, misc_n), node_range), dim=0)
     return sparse
 
 
