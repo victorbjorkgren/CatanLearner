@@ -25,14 +25,13 @@ class Game:
         self.first_turn = None
         self.current_player = None
         self.player_agents = None
-        self.players = None
         self.board = None
         self.turn = None
         self.idle_turns = None
 
         # Placeholder inits
         self.board = Board(self.n_players)
-        self.players = [Player(RandomAgent()) for _ in range(self.n_players)]
+        self.players = [Player(RandomAgent(capacity=1, alpha=1, beta=1)) for _ in range(self.n_players)]
 
         self.zero_reward = T.zeros((self.n_players,))
         self.listeners = dict()
@@ -53,7 +52,7 @@ class Game:
         self.publish('reset')
         self.render()
 
-    def set_agents(self, player_agents: [BaseAgent, BaseAgent]):
+    def register_agents(self, player_agents: [BaseAgent, BaseAgent]):
         assert len(player_agents) == self.n_players
         self.player_agents = player_agents
 

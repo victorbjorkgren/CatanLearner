@@ -104,9 +104,9 @@ class GameNet(nn.Module):
         self.face_mask = self.face_mask.flatten()
         self.full_mask = self.full_mask.flatten()
 
-        self.face_adj_norm = preprocess_adj(self.face_adj, batch_size)
-        self.edge_adj_norm = preprocess_adj(self.edge_adj, batch_size)
-        self.full_adj_norm = preprocess_adj(self.full_adj, batch_size)
+        self.face_adj_norm = preprocess_adj(self.face_adj, batch_size, add_self_loops=False)
+        self.edge_adj_norm = preprocess_adj(self.edge_adj, batch_size, add_self_loops=False)
+        self.full_adj_norm = preprocess_adj(self.full_adj, batch_size, add_self_loops=False)
 
         self.node_embed = MLP(n_node_attr + n_players * n_player_attr, n_embed)
         self.edge_embed = MLP(n_edge_attr + n_players * n_player_attr, n_embed)

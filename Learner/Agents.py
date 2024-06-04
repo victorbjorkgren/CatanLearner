@@ -27,7 +27,7 @@ class BaseAgent(PrioReplayBuffer):
 
 
 class RandomAgent(BaseAgent):
-    def __init__(self, capacity, alpha, beta):
+    def __init__(self, capacity: int, alpha: float, beta: float) -> None:
         super().__init__(capacity, alpha, beta)
 
     def sample_action(self, game: Game, state: T.Tensor, i_am_player: int, remember: bool = True) -> tuple[T.Tensor, T.Tensor]:
@@ -99,7 +99,8 @@ class RandomAgent(BaseAgent):
 
 
 class QAgent(BaseAgent):
-    def __init__(self, q_net: GameNet, game, capacity, alpha, beta):
+    def __init__(self, q_net: GameNet, game: Game, capacity: int, alpha: float, beta: float) -> None:
+
         super().__init__(capacity, alpha, beta)
         self.q_net = q_net
         self.sparse_edge = game.board.state.edge_index.clone()
@@ -109,7 +110,7 @@ class QAgent(BaseAgent):
         self.action = T.tensor((0, 0))
         self.raw_action = T.tensor((73, 73))
 
-    def sample_action(self, game, state, i_am_player, remember=True) -> tuple[T.Tensor, T.Tensor]:
+    def sample_action(self, game: Game, state: T.Tensor, i_am_player: int, remember: bool = True) -> tuple[T.Tensor, T.Tensor]:
         build_q: T.Tensor
 
         road_mask, village_mask = get_masks(game, i_am_player)
@@ -127,7 +128,7 @@ class QAgent(BaseAgent):
 
         if mask.sum() == 0:
             if remember:
-                self.add(state, mask, self.raw_action, 0, 0, game.episode)
+                self.add(state, mask, self.raw_action, 0, 0, game.episode, i_am_player)
             return self.action, self.raw_action
         with T.no_grad():
             q = self.q_net(state).detach()
@@ -137,6 +138,8 @@ class QAgent(BaseAgent):
         build_q = q.max()
 
         if (pass_q > build_q) & (not game.first_turn):
+            if remember:
+                self.add(state, mask, self.raw_action, 0, 0, game.episode, i_am_player)
             return T.tensor((0, 0)), T.tensor((73, 73))
         else:
             build_action = T.argwhere(q == build_q).cpu()
@@ -153,16 +156,20 @@ class QAgent(BaseAgent):
                         & (game.board.state.edge_index[1] == build_action[1])
                 )
                 index = T.argwhere(bool_hit).item()
+                if remember:
+                    self.add(state, mask, build_action, 0, 0, game.episode, i_am_player)
                 return T.tensor((1, index)), build_action
 
             elif build_action[0] == build_action[1]:
                 if build_action[0] >= 54:
                     raise Exception("Non-node index returned for building settlement")
+                if remember:
+                    self.add(state, mask, build_action, 0, 0, game.episode, i_am_player)
                 return T.tensor((2, build_action[0])), build_action
             else:
                 raise Exception("Invalid Build Action in QAgent")
 
-    def mask_to_dense(self, road_mask, village_mask):
+    def mask_to_dense(self, road_mask: T.Tensor, village_mask: T.Tensor) -> T.Tensor:
         village_mask = T.diag_embed(village_mask).bool()
         if road_mask.sum() == 0:
             road_mask = T.zeros_like(village_mask, dtype=T.bool)
@@ -171,6 +178,6 @@ class QAgent(BaseAgent):
                                                max_num_nodes=village_mask.shape[-1]).bool()
         return village_mask + road_mask
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return "QAgent"
 

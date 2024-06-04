@@ -11,6 +11,10 @@ MAX_STEPS = 100_000_000
 HISTORY_DISPLAY = 100
 N_PLAYERS = 2
 
+REPLAY_MEMORY_SIZE = 2 ** 13  # 8192
+REPLAY_ALPHA = .7
+REPLAY_BETA = .9
+
 REWARD_MIN_FOR_Q = 3
 
 device = 'cuda' if T.cuda.is_available() else 'cpu'
@@ -38,12 +42,9 @@ trainer = Trainer(
     q_net=q_net,
     target_net=target_net,
     batch_size=64,
-    dry_run=0,
+    dry_run=128,
     reward_min=REWARD_MIN_FOR_Q,
     gamma=.9,
-    memory_size=2 ** 14,  # 16384
-    alpha=.7,
-    beta=.9
 )
 try:
     q_net.load()
@@ -53,33 +54,31 @@ target_net.clone_state(q_net)
 q_net = q_net.to(device)
 target_net = target_net.to(device)
 
-agent1 = RandomAgent()
+random_agent = RandomAgent(
+    capacity=REPLAY_MEMORY_SIZE,
+    alpha=REPLAY_ALPHA,
+    beta=REPLAY_BETA
+)
+q_agent = QAgent(
+    q_net=q_net,
+    game=game,
+    capacity=REPLAY_MEMORY_SIZE,
+    alpha=REPLAY_ALPHA,
+    beta=REPLAY_BETA
+)
 
-random_vs_random = [RandomAgent(), RandomAgent()]
-random_vs_q = [
-    RandomAgent(),
-    QAgent(
-        q_net=q_net,
-        game=game
-    )
-]
-q_vs_q = [
-    QAgent(
-        q_net=q_net,
-        game=game
-    ),
-    QAgent(
-        q_net=q_net,
-        game=game
-    )
-]
+# random_vs_random = [random_agent, random_agent]
+random_vs_q = [random_agent, q_agent]
+# q_vs_q = [q_agent, q_agent]
 
-game.set_agents(random_vs_random)
+trainer.register_agents([random_agent, q_agent])
+game.register_agents(random_vs_q)
 game.reset()
 
 reward_history = T.zeros((HISTORY_DISPLAY, 2))
 beat_time = T.zeros((HISTORY_DISPLAY, 2))
-loss_hist = T.zeros((HISTORY_DISPLAY,))
+td_loss_hist = T.zeros((HISTORY_DISPLAY,))
+rule_loss_hist = T.zeros((HISTORY_DISPLAY,))
 iterator = tqdm(range(MAX_STEPS))
 for i in iterator:
     observation, obs_player = q_net.get_dense(game)
@@ -90,33 +89,35 @@ for i in iterator:
         remember=True
     )
     reward, done, succeeded = game.step(action)
-    new_observation, _ = q_net.get_dense(game)
 
+    # Should not trigger
     if not succeeded:
+        print(f'Invalid action {raw_action.tolist()} by player {game.current_player}')
         raw_action = T.tensor((73, 73))
 
-    trainer.add(observation, raw_action, new_observation, reward, done, obs_player)
-    loss = trainer.train(i, game.episode)
+    # Training tick
+    td_loss, rule_loss = trainer.train()
 
+    # Update trackers
     reward_history[game.episode % reward_history.shape[0], :] = reward.clamp_min(0)
     beat_time[game.episode % beat_time.shape[0], reward == 1] = game.turn
-    loss_hist[i % loss_hist.shape[0]] = loss
+    td_loss_hist[i % td_loss_hist.shape[0]] = td_loss
+    rule_loss_hist[i % rule_loss_hist.shape[0]] = rule_loss
 
+    # On episode termination
     if done:
-        if trainer.reward_sum >= REWARD_MIN_FOR_Q:
-            game.render(training_img=True)
-            game.set_agents(random_vs_q)
-            q_net.save()
-        else:
-            game.set_agents(random_vs_random)
+        for ii in range(len(game.player_agents)):
+            game.player_agents[ii].update_reward(reward[ii])
+        game.render(training_img=True)
+        q_net.save()
         game.reset()
 
     mask = T.tensor(beat_time != 0)
     avg_beat_time = (beat_time * mask).sum(dim=0) / mask.sum(dim=0)
     iterator.set_postfix_str(
         f"Ep: {game.episode}-{int(game.turn)}, "
-        f"Loss: {loss_hist[loss_hist.nonzero()].mean().item():.3e} "
-        f"WinHistory: {reward_history.sum(0).long().tolist()} ({int(trainer.reward_sum.item())}), "
+        f"TD Loss: {td_loss_hist[td_loss_hist.nonzero()].mean().item():.3e} "
+        f"Rule Loss: {rule_loss_hist[rule_loss_hist.nonzero()].mean().item():.3e} "
+        f"WinHistory: {reward_history.sum(0).long().tolist()}, "
         f"AvgBeatTime: {avg_beat_time.int().tolist()}, "
-        f"Players: {game.player_agents[0]} vs {game.player_agents[1]}"
     )
