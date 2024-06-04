@@ -1,69 +1,74 @@
-from typing import List, Tuple
+from time import sleep
+from typing import Tuple
 
-import numpy as np
 import torch as T
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 
-from Learner.Agents import BaseAgent
 from Learner.Nets import GameNet
+from Learner.PrioReplayBuffer import PrioReplayBuffer
 
 
 class Trainer:
     def __init__(self,
                  q_net: GameNet,
                  target_net: GameNet,
+                 buffer: PrioReplayBuffer,
                  batch_size: int,
-                 dry_run: int,
-                 reward_min: int,
                  gamma: float
                  ):
         self.q_net = q_net
         self.target_net = target_net
+        self.buffer = buffer
         self.batch_size = batch_size
-        self.dry_run = dry_run
-        self.reward_min = reward_min
+        # self.reward_min = reward_min
         self.gamma = gamma
         self.optimizer = optim.Adam(self.q_net.parameters(), lr=1e-4, weight_decay=1e-5)
         self.batch_range = T.arange(self.batch_size, dtype=T.long)
 
-        self.available_agents = None
-        self.tick = 0
+        # self.available_agents = None
+        self.tick_iter = 0
 
         self.known_allowed_states = None
 
+    def tick(self):
+        if self.buffer.mem_size < self.batch_size:
+            sleep(1)
+            return 0.
+
+        td_loss = self.train()
+
+        if self.tick_iter % 100 == 0:
+            self.save('latest')
+        if self.tick_iter % 200 == 0:
+            self.save('checkpoint')
+
+        self.tick_iter += 1
+
+        return td_loss
+
     def train(self) -> float:
-        assert self.available_agents is not None, 'Trainer: No available agents'
+        assert self.buffer.mem_size >= self.batch_size
 
-        self.tick += 1
-        if self.tick < self.dry_run:
-            return 0.
-
-        agent = self.choose_agent()
-
-        if agent.mem_size < self.batch_size:
-            return 0.
-        else:
-            sample = agent.sample(self.batch_size)
+        sample = self.buffer.sample(self.batch_size)
 
         inds = T.tensor(sample["inds"])
         weights = T.tensor(sample["weights"]).to(self.q_net.on_device)
         batch_range = self.batch_range[:inds.shape[0]]
 
-        state = agent.data['state'][inds].to(self.q_net.on_device)
-        action = agent.data['action'][inds].to(self.q_net.on_device)
-        reward = agent.data['reward'][inds].to(self.q_net.on_device)
-        done = agent.data['done'][inds].bool().to(self.q_net.on_device)
-        player = agent.data['player'][inds].to(self.q_net.on_device)
-        seq_lens = agent.data['seq_len'][inds].long()
-        lstm_state = agent.data['lstm_state'][None, inds, 0, :].to(self.q_net.on_device)
-        lstm_cell = agent.data['lstm_cell'][None, inds, 0, :].to(self.q_net.on_device)
+        state = self.buffer.data['state'][inds].to(self.q_net.on_device)
+        action = self.buffer.data['action'][inds].to(self.q_net.on_device)
+        reward = self.buffer.data['reward'][inds].to(self.q_net.on_device)
+        done = self.buffer.data['done'][inds].bool().to(self.q_net.on_device)
+        player = self.buffer.data['player'][inds].to(self.q_net.on_device)
+        seq_lens = self.buffer.data['seq_len'][inds].long()
+        lstm_state = self.buffer.data['lstm_state'][None, inds, 0, :].to(self.q_net.on_device)
+        lstm_cell = self.buffer.data['lstm_cell'][None, inds, 0, :].to(self.q_net.on_device)
 
-        lstm_target_state = agent.data['lstm_state'][None, inds, -1, :].to(self.q_net.on_device)
-        lstm_cell_state = agent.data['lstm_cell'][None, inds, -1, :].to(self.q_net.on_device)
+        lstm_target_state = self.buffer.data['lstm_state'][None, inds, -1, :].to(self.q_net.on_device)
+        lstm_cell_state = self.buffer.data['lstm_cell'][None, inds, -1, :].to(self.q_net.on_device)
 
-        # TODO: Check Norm of samples
         q, _, _ = self.q_net(state, seq_lens, lstm_state, lstm_cell)
         q = q[batch_range, :, :, :, player]
 
@@ -103,7 +108,7 @@ class Trainer:
         self.optimizer.step()
 
         # Sometimes print weight info
-        if self.tick % 1000 == 0:
+        if self.tick_iter % 1000 == 0:
             for name, module in self.q_net.named_modules():
                 if hasattr(module, 'weight') and module.weight is not None:
                     weight_max = T.max(module.weight).item()
@@ -111,32 +116,19 @@ class Trainer:
                     print(f"{name}: Max weight = {weight_max:.4e} - Max grad = {grad_max:.4e}")
 
         # Update others
-        if self.tick % 100 == 0:
+        if self.tick_iter % 100 == 0:
             self.target_net.clone_state(self.q_net)
 
-        agent.update_prio(inds, td_error.mean(-1).detach().cpu().numpy())
+        self.buffer.update_prio(inds, td_error.mean(-1).detach().cpu().numpy())
 
-        return td_error.mean().item()  #, rule_break_loss.item()
+        return td_error.mean().item()
 
-        # except Exception as e:
-        #     print(e)
-        #     return 0.
-
-    def register_agents(self, agents: List[BaseAgent]):
-        self.available_agents = agents
-
-    def choose_agent(self) -> BaseAgent:
-        assert self.available_agents is not None, 'Trainer: No available agents'
-        """Chooses an agent based on the total prio for each agent."""
-        prios = np.empty(len(self.available_agents))
-        for i in range(len(self.available_agents)):
-            prios[i] = self.available_agents[i].priority_sum
-        prios[prios < 1e-6] = 1e-6
-        choice = np.random.choice(len(self.available_agents), p=prios / prios.sum(), size=(1,))
-        return self.available_agents[choice.item()]
-
-    def save(self):
-        self.q_net.save()
+    def save(self, method):
+        assert method in ['latest', 'checkpoint']
+        if method == 'latest':
+            self.q_net.save('latest')
+        else:
+            self.q_net.save(self.tick_iter)
 
     def update_known_allowed(self, state_mask):
         if self.known_allowed_states is None:
