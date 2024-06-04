@@ -116,7 +116,8 @@ class AgentTracker:
         updated_elo = player_elo.copy()
 
         for i in range(n):
-            actual_score = self.agent_list[i].episode_score / 10  # Normalize rank to a score between 0 and 1
+            # Normalize rank to a score between 0 and 1. Skip the two first round points.
+            actual_score = (self.agent_list[i].episode_score-2) / 8
             for j in range(n):
                 if i != j:
                     expected_score_i_vs_j = 1 / (1 + 10 ** ((player_elo[j] - player_elo[i]) / 400))
