@@ -126,7 +126,7 @@ class GameNet(nn.Module):
         self.full_mask = self.full_mask.to(self.on_device)
         self.out_matrix = self.out_matrix.to(self.on_device)
 
-    def forward(self, observation):
+    def forward(self, observation: T.Tensor) -> T.Tensor:
         observation = observation.to(self.on_device)
         mask = ~self.action_mask.unsqueeze(-1).repeat(observation.shape[0], 1, 1, self.n_output).to(self.on_device)
 
