@@ -1,5 +1,6 @@
 import torch as T
 
+
 def extract_attr(game):
     node_x = game.board.state.x
     edge_x = game.board.state.edge_attr
@@ -26,6 +27,7 @@ def sparse_face_matrix(face_index, to_undirected):
         connections = T.cat((connections, connections.flip(0)), dim=1)
     return connections
 
+
 def sparse_misc_node(node_n, misc_n):
     node_range = T.arange(node_n + 1)
     sparse = T.stack((node_range, T.full_like(node_range, misc_n)), dim=0)
@@ -39,3 +41,9 @@ def preprocess_adj(adj, batch_size):
     D_hat = T.diag(D_hat_diag)
     adj_normalized = T.mm(T.mm(D_hat, A_hat), D_hat)
     return adj_normalized.repeat((batch_size, 1, 1))
+
+
+def get_masks(game, i_am_player):
+    road_mask = game.board.get_road_mask(i_am_player, game.players[i_am_player].hand, game.first_turn)
+    village_mask = game.board.get_village_mask(i_am_player, game.players[i_am_player].hand, game.first_turn)
+    return road_mask, village_mask

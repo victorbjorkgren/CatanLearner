@@ -1,9 +1,11 @@
 import os
 import random
+from typing import Any
+
 import matplotlib.pyplot as plt
 import networkx as nx
 import numpy as np
-import torch
+import torch as T
 from torch_geometric.utils.convert import to_networkx
 
 from Learner.Agents import RandomAgent
@@ -19,7 +21,7 @@ class Game:
         self.max_turns = max_turns
         self.episode = start_episode
 
-        self.first_turn_switch = None
+        self.first_turn_village_switch = None
         self.first_turn = None
         self.current_player = None
         self.player_agents = None
@@ -31,7 +33,12 @@ class Game:
         self.board = Board(self.n_players)
         self.players = [Player(RandomAgent()) for _ in range(self.n_players)]
 
-        self.zero_reward = torch.zeros((self.n_players,))
+        self.zero_reward = T.zeros((self.n_players,))
+        self.listeners = dict()
+
+    @property
+    def current_agent(self):
+        return self.players[self.current_player].agent
 
     def reset(self):
         self.turn = 0
@@ -40,33 +47,29 @@ class Game:
         self.players = [Player(agent) for agent in self.player_agents]
         self.current_player = 0
         self.first_turn = True
-        self.first_turn_switch = False
-    
+        self.first_turn_village_switch = True
+        self.publish('reset')
+
     def set_agents(self, player_agents: []):
         assert len(player_agents) == self.n_players
         self.player_agents = player_agents
-    
+
     def start(self, render=False):
         return self.game_loop(render)
 
-    def step(self, action, render=False):
+    def step(self, action: tuple[int, int], render: bool = False) -> tuple[T.Tensor, bool, tuple[int, int]]:
+        """Take one action step in the game. Returns reward, done, and the actual action."""
         if self.first_turn:
-            if self.first_turn_switch:
-                build_succeeded = self.build_village(action[1], self.current_player, first_turn=True)
-            else:
-                build_succeeded = self.build_road(action[1], self.current_player, first_turn=True)
-            if build_succeeded:
-                # Check if first turn has ended
-                if self.current_player == (self.n_players - 1):
-                    if self.players[self.current_player].n_roads == 2:
-                        self.first_turn = False
-                        # Give resources to all villages
-                        face_hits = torch.nonzero(self.board.state.face_attr)
-                        for hit in face_hits:
-                            self.give_resource(hit)
-                self.current_player = (self.current_player + 1) % self.n_players
-                if self.current_player == 0:
-                    self.first_turn_switch = not self.first_turn_switch
+            self.first_turn_step(action)
+            return self.zero_reward, False, action
+
+        if action[0] == 1:
+            if not self.build_road(action[1], self.current_player):
+                action = (0, 0)
+
+        elif action[0] == 2:
+            if not self.build_village(action[1], self.current_player):
+                action = (0, 0)
 
         if action[0] == 0:
             self.current_player = (self.current_player + 1) % self.n_players
@@ -76,22 +79,34 @@ class Game:
             if self.current_player == 0:
                 self.resource_step()
 
-        elif action[0] == 1:
-            self.build_road(action[1], self.current_player)
-
-        elif action[0] == 2:
-            self.build_village(action[1], self.current_player)
-
         if self.game_on():
-            return self, self.zero_reward
+            return self.zero_reward, False, action
         else:
-            points = torch.tensor([e.points for e in self.players])
+            points = T.tensor([e.points for e in self.players])
             winner = points >= 10
             if winner.sum() >= 1:
                 rewards = winner.float() * 2 - 1
             else:
-                rewards = torch.zeros_like(winner, dtype=torch.float)
-            return self, rewards
+                rewards = T.zeros_like(winner, dtype=T.float)
+            return rewards, True, action
+
+    def first_turn_step(self, action) -> None:
+        if self.first_turn_village_switch:
+            build_succeeded = self.build_village(action[1], self.current_player, first_turn=True)
+        else:
+            build_succeeded = self.build_road(action[1], self.current_player, first_turn=True)
+        if build_succeeded:
+            # Check if first turn has ended
+            if self.current_player == (self.n_players - 1):
+                if self.players[self.current_player].n_roads == 2:
+                    self.first_turn = False
+                    # Give resources to all villages
+                    face_hits = T.nonzero(self.board.state.face_attr)
+                    for hit in face_hits:
+                        self.give_resource(hit)
+            self.current_player = (self.current_player + 1) % self.n_players
+            if self.current_player == 0:
+                self.first_turn_village_switch = not self.first_turn_village_switch
 
     def take_first_turn(self):
         for player in range(self.n_players):
@@ -102,7 +117,7 @@ class Game:
             self.build_free_road(player)
 
         # Give resources to all villages
-        face_hits = torch.nonzero(self.board.state.face_attr)
+        face_hits = T.nonzero(self.board.state.face_attr)
         for hit in face_hits:
             self.give_resource(hit)
 
@@ -128,35 +143,33 @@ class Game:
         while self.game_on():
             # Basic Game Loop
             self.resource_step()
-            self.take_turn(current_player)
+            self.take_turn()
 
             # Update trackers
-            current_player = (current_player + 1) % self.n_players
+            self.current_player = (self.current_player + 1) % self.n_players
             self.turn += 1 / self.n_players
 
             # Render
             if render:
                 self.render()
 
-        points = torch.tensor([e.points for e in self.players])
+        points = T.tensor([e.points for e in self.players])
         winner = points.max() == points
         if winner.sum() > 1:
-            rewards = torch.zeros_like(winner, dtype=torch.float)
+            rewards = T.zeros_like(winner, dtype=T.float)
         else:
             rewards = winner.float() * 2 - 1
         return rewards
 
-    def take_turn(self, current_player):
+    def take_turn(self):
         turn_completed = False
         while not turn_completed:
-            action_type, action_index = self.players[current_player].sample_action(
+            action_type, action_index = self.players[self.current_player].sample_action(
                 self,
-                self.board.get_road_mask(current_player, self.players[current_player].hand),
-                self.board.get_village_mask(current_player, self.players[current_player].hand),
-                i_am_player=current_player
+                i_am_player=self.current_player
             )
 
-            turn_completed = self.take_action(action_type, current_player, action_index)
+            turn_completed = self.take_action(action_type, self.current_player, action_index)
 
     def game_on(self):
         for player in self.players:
@@ -186,7 +199,7 @@ class Game:
                 hand.rob()
 
         # Find nodes attain resources
-        face_hits = torch.argwhere(self.board.state.face_attr == dice)
+        face_hits = T.argwhere(self.board.state.face_attr == dice)
         for hit in face_hits:
             self.give_resource(hit)
 
@@ -258,6 +271,17 @@ class Game:
                     self.players[player].points += 1
                     return True
         return False
+
+    def subscribe(self, event_type, listener):
+        if event_type not in self.listeners:
+            self.listeners[event_type] = [listener]
+        else:
+            self.listeners[event_type].append(listener)
+
+    def publish(self, event_type: str, data: Any = None) -> None:
+        if event_type in self.listeners:
+            for listener in self.listeners[event_type]:
+                listener(data)
 
     def render(self, debug=False):
         if self.n_players != 2:
@@ -349,7 +373,6 @@ class Game:
         if debug:
             nx.draw_networkx_labels(s, self.board.state.pos)
 
-
         ###
         # Save
         ###
@@ -359,5 +382,3 @@ class Game:
         os.makedirs(folder, exist_ok=True)
         plt.savefig(os.path.join(folder, filename))
         plt.close()
-
-

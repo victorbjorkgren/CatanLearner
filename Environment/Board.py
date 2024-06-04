@@ -1,4 +1,4 @@
-import torch
+import torch as T
 from torch_geometric.utils.convert import from_networkx
 import torch_geometric.data as pyg_data
 
@@ -30,14 +30,14 @@ class Board:
 
         # init states
         grid = make_hex_grid(BOARD_SIZE)
-        node_states = torch.zeros((len(grid.nodes), n_players), dtype=torch.float)
-        edge_states = torch.zeros((len(grid.edges) * 2, n_players), dtype=torch.float)
-        face_states = torch.zeros((N_TILES, N_TILE_TYPES), dtype=torch.float)
+        node_states = T.zeros((len(grid.nodes), n_players), dtype=T.float)
+        edge_states = T.zeros((len(grid.edges) * 2, n_players), dtype=T.float)
+        face_states = T.zeros((N_TILES, N_TILE_TYPES), dtype=T.float)
 
         # Fill Faces as tiles
         for i in range(len(TILE_TYPES)):
             face_states[i, TILE_TYPES[i]] = TILE_NUMBERS[i]
-        shuffled_faces = torch.randperm(face_states.size(0))
+        shuffled_faces = T.randperm(face_states.size(0))
         face_states = face_states[shuffled_faces]
 
         # Make Faces and assign Nodes
@@ -45,7 +45,7 @@ class Board:
         face_per_row = [3, 4, 5, 4, 3]
         v_cum = [sum(verts_per_row[:i]) for i in range(0, len(verts_per_row) + 1)]
         f_cum = [sum(face_per_row[:i]) for i in range(0, len(face_per_row) + 1)]
-        face_inds = torch.zeros((N_TILES, 6), dtype=torch.long)
+        face_inds = T.zeros((N_TILES, 6), dtype=T.long)
         for row in range(len(face_per_row)):
             for col in range(face_per_row[row]):
 
@@ -68,7 +68,7 @@ class Board:
                     v_cum[row + 1] + 1 + col_offset + row_offset,
                     v_cum[row + 1] + 2 + col_offset + row_offset
                 ]
-                face_inds[f_cum[row] + col, :] = torch.tensor(inds)
+                face_inds[f_cum[row] + col, :] = T.tensor(inds)
 
         # Make PyG state
         grid = from_networkx(grid)
@@ -100,8 +100,13 @@ class Board:
         self.state.edge_attr[uv_indices, player] = 1
         self.state.edge_attr[vu_indices, player] = 1
 
-    def can_build_village(self, node_id, player, first_turn=False):
-        adj_mask = (self.state.edge_index == node_id).any(0)
+    def can_build_village(self, node_id: int | T.Tensor, player: int, first_turn: bool = False) -> bool:
+        if isinstance(node_id, T.Tensor):
+            node_id = node_id.item()
+        try:
+            adj_mask = (self.state.edge_index == node_id).any(0)
+        except:
+            breakpoint()
         edges_adj = self.state.edge_index[:, adj_mask]
         neighborhood_nodes = edges_adj.unique()
         adjacent_nodes = neighborhood_nodes[neighborhood_nodes != node_id]
@@ -109,26 +114,26 @@ class Board:
         roads = self.state.edge_attr[adj_mask, player].nonzero().numel()
         adjacent_buildings = self.state.x[adjacent_nodes, :].nonzero().numel()
         my_buildings = self.state.x[node_id, player]
-        other_players_buildings = (self.state.x[node_id, player].sum() - my_buildings)
+        other_players_buildings = (self.state.x[node_id, :].sum() - my_buildings)
 
         is_free = (adjacent_buildings == 0) & (other_players_buildings == 0) & (my_buildings < 2)
         has_connection = roads != 0
 
         return is_free & (has_connection | first_turn), my_buildings
 
-    def get_village_mask(self, player, hand, first_turn=False) -> torch.Tensor:
-        mask = torch.zeros((self.state.num_nodes, ), dtype=torch.bool)
+    def get_village_mask(self, player, hand, first_turn=False) -> T.Tensor:
+        mask = T.zeros((self.state.num_nodes, ), dtype=T.bool)
         for node_id in range(self.state.num_nodes):
             can_build, size = self.can_build_village(node_id, player, first_turn)
-            if can_build & (size == 0) & (hand >= torch.tensor([1, 1, 0, 1, 1])).all():
+            if can_build & (size == 0) & (hand >= T.tensor([1, 1, 0, 1, 1])).all():
                 mask[node_id] = True
-            if can_build & (size == 1) & (hand >= torch.tensor([0, 2, 3, 0, 0])).all():
+            if can_build & (size == 1) & (hand >= T.tensor([0, 2, 3, 0, 0])).all():
                 mask[node_id] = True
         return mask
 
-    def get_road_mask(self, player, hand, first_turn=False) -> torch.Tensor:
-        mask = torch.zeros((self.state.num_edges,), dtype=torch.bool)
-        if (hand < torch.tensor([1, 0, 0, 1, 0])).any():
+    def get_road_mask(self, player, hand, first_turn=False) -> T.Tensor:
+        mask = T.zeros((self.state.num_edges,), dtype=T.bool)
+        if (hand < T.tensor([1, 0, 0, 1, 0])).any():
             return mask
         for edge_id in range(self.state.num_edges):
             can_build = self.can_build_road(edge_id, player, first_turn)
