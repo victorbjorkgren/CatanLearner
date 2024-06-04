@@ -26,13 +26,12 @@ class PrioReplayBuffer:
                  max_seq_len: int,
                  alpha: float,
                  beta: float,
-                 save_interval: int = 1000
+                 save_interval: int = 10_000
                  ) -> None:
         assert_capacity(capacity)
 
-        # TODO: Currently disabling loading replay buffer as it's setup changes so much. Re-enable when possible.
-        # if self.load():
-        #     return
+        if self.load():
+            return
 
         self._capacity = capacity
         self._alpha = alpha
@@ -44,7 +43,7 @@ class PrioReplayBuffer:
         self._max_priority = 1.
         self._sum_priority = 0.
 
-        # TODO: Make board size and n_player invariant
+        # TODO: Make board size invariant
         # TODO: Fix Magic Numbers
         self.data = {
             'state': T.zeros((capacity, max_seq_len, 74, 74, 16), dtype=T.float),
@@ -102,7 +101,7 @@ class PrioReplayBuffer:
 
         self._size = min(self._capacity, self._size + 1)
 
-        # self.save_test()
+        self.save_test()
 
     def sample(self, n):
         prob = self.data['prio'] / self.data['prio'].sum()

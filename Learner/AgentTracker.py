@@ -20,9 +20,11 @@ class AgentTracker:
         self.has_agents = False
         self.has_loaded = False
 
-        self.checkpoint_elo = {}
+        self.checkpoint_elo = None
         self.titan_elo = 1000
         self.random_elo = 1000
+        self.best_elo = 0
+        self.load_elo()
 
     def register_agents(self, agent_list):
         self.has_agents = True
@@ -32,7 +34,7 @@ class AgentTracker:
             agent.tracker_instance = self
 
         self.set_titan()
-        self.load_contestants('random')
+        self.load_contestants('weighted')
 
     def set_titan(self):
         assert self.has_agents
@@ -44,6 +46,7 @@ class AgentTracker:
 
     def load_contestants(self, method):
         assert method in ['random', 'weighted']
+        assert self.checkpoint_elo is not None
         assert self.has_agents
         assert self.has_titan
 
@@ -51,6 +54,7 @@ class AgentTracker:
 
         os.makedirs('./PastTitans/', exist_ok=True)
         self.contestants = os.listdir('./PastTitans/')
+
         champions = []
         if method == 'random':
             for agent in self.agent_list:
@@ -64,7 +68,7 @@ class AgentTracker:
                     champions.append(r.choice(self.contestants))
 
         else:
-            champions = self.select_checkpoint(len(self.agent_list))
+            champions = self.match_making(len(self.agent_list))
 
         epsilons = r.choices(
             [0., r.uniform(self.eps_min, self.eps_max), 1.],
@@ -72,10 +76,17 @@ class AgentTracker:
             k=len(self.agent_list)
         )
 
-
-        # TODO: WAS HERE: GET ELO AND LOAD
         for i, agent in enumerate(self.agent_list):
-        agent.load_state(champion, epsilon)
+            if agent.is_titan:
+                elo = self.titan_elo
+            elif epsilons[i] == 0.:
+                elo = self.random_elo
+            elif champions[i] in self.checkpoint_elo:
+                elo = self.checkpoint_elo[champions[i]]
+            else:
+                e = f"Could not find ELO for agent {champions[i]}"
+                raise RuntimeError(e)
+            agent.load_state(champions[i], epsilons[i], elo)
 
     def shuffle_agents(self):
         r.shuffle(self.agent_list)
@@ -112,6 +123,8 @@ class AgentTracker:
                     updated_elo[i] += k * (actual_score - expected_score_i_vs_j)
 
         for i, agent in enumerate(self.agent_list):
+            if updated_elo[i] > self.best_elo:
+                self.best_elo = updated_elo[i]
             if agent.my_name in ['latest', 'Titan']:
                 self.titan_elo = updated_elo[i]
             else:
@@ -145,13 +158,14 @@ class AgentTracker:
         - A list of weights corresponding to each checkpoint.
         """
         assert self.checkpoint_elo is not None
+        assert self.best_elo > 0
 
-        elo_differences = np.array([self.titan_elo - elo for elo in self.checkpoint_elo.values()])
+        elo_differences = np.array([self.best_elo - elo for elo in self.checkpoint_elo.values()])
         weights = self.gaussian_pdf(elo_differences, mu=0, sigma=sigma)
         normalized_weights = weights / np.sum(weights)
         return normalized_weights
 
-    def select_checkpoint(self, k, sigma=100):
+    def match_making(self, k, sigma=100):
         """
         Select a checkpoint based on Gaussian-weighted ELO differences.
 
@@ -177,13 +191,16 @@ class AgentTracker:
         try:
             with open('./CheckPointELO.pkl', 'rb') as f:
                 self.checkpoint_elo = pickle.load(f)
+            for v in self.checkpoint_elo.values():
+                if v > self.best_elo:
+                    self.best_elo = v
         except FileNotFoundError:
+            print('No ELO for checkpoints found - init fresh')
             self.checkpoint_elo = {}
-
-        checkpoints = os.listdir('./PastTitans/')
-        for e in checkpoints:
-            if e not in self.checkpoint_elo:
-                self.checkpoint_elo[e] = 1000
+            checkpoints = os.listdir('./PastTitans/')
+            for e in checkpoints:
+                if e not in self.checkpoint_elo:
+                    self.checkpoint_elo[e] = 1000
 
 
 
