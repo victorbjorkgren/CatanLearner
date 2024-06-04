@@ -8,4 +8,4 @@ game = Game([
 
 ])
 
-game.start(render=True)
+game.start(render=False)
