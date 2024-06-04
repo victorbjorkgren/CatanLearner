@@ -22,6 +22,9 @@ class Agent:
                  history_display: int = 100
                  ) -> None:
 
+        self.n_trades = 0
+        self.n_roads = 0
+        self.n_houses = 0
         self._last_transition: Transition | None = None
         self.tracker_instance = None
 
@@ -74,6 +77,10 @@ class Agent:
     def sum_win(self):
         return sum(self.win_history)
 
+    @property
+    def episode_actions(self) -> T.Tensor:
+        return T.tensor([self.n_houses, self.n_roads, self.n_trades])
+
     @abstractmethod
     def sample_action(self, state: T.Tensor, i_am_player: int) -> tuple[T.Tensor, T.Tensor]:
         pass
@@ -91,6 +98,18 @@ class Agent:
                 return village_mask[T.randint(0, village_mask.shape[0], (1,))]
         else:
             raise RuntimeError("Random Agent could not find house on round 1")
+
+    def register_action(self, action: int) -> None:
+        if action == 0:
+            pass
+        elif action == 1:
+            self.n_houses += 1
+        elif action == 2:
+            self.n_roads += 1
+        elif action == 3:
+            self.n_trades += 1
+        else:
+            raise RuntimeError("Tried to register faulty action")
 
     def sample_random(self, i_am_player: int) -> Tuple[T.Tensor, T.Tensor, bool]:
         if self.game.first_turn:
@@ -176,6 +195,9 @@ class Agent:
         self.lstm_cell_seq.clear()
 
         self.episode_score = 0
+        self.n_houses = 0
+        self.n_roads = 0
+        self.n_trades = 0
 
     def _flush_buffer(self, done: bool, i_am_player: int, force: bool = False) -> None:
         has_length = len(self.state_seq) >= (self.max_seq_length - self.burn_in_length)
@@ -369,14 +391,15 @@ class QAgent(Agent):
                 self._to_buffer(action=raw_action)
                 self._to_buffer(q=q_mat[0, 0, raw_action[0], raw_action[1], i_am_player])
             self._to_buffer(was_trade=T.tensor([was_trade], dtype=T.bool))
+            self.register_action(action[0])
             return action, raw_action
 
         pass_q = q_mat[0, 0, -1, -1, i_am_player]
-        q_mat[0, build_mask] = -T.inf
 
-        q_trade_mat = q_trade_mat[0, 0, :, :, i_am_player]
+        q_mat[0, build_mask] = -T.inf
         q_trade_mat[0, 0, 0, :, i_am_player][trade_mask] = -T.inf
 
+        q_trade_mat = q_trade_mat[0, 0, :, :, i_am_player]
         q_mat = q_mat[0, 0, :54, :54, i_am_player]
         q_mat, q_trade_mat = self._pull_cache(state_key, q_mat, q_trade_mat)
 
@@ -398,11 +421,12 @@ class QAgent(Agent):
             try:
                 trade_action = T.tensor((give, get), dtype=T.float)
             except:
-                1
+                print("Exception in trade_action = T.tensor((give, get), dtype=T.float)")
             self._to_buffer(q=trade_q)
             self._to_buffer(action=trade_action)
             self._to_buffer(was_trade=T.tensor([True], dtype=T.bool))
             self._push_cache(state_key, trade_action, True)
+            self.register_action(3)
             return T.Tensor((3, give, get)), trade_action
         else:
             build_action = T.argwhere(q_mat == build_q).cpu()
@@ -423,6 +447,7 @@ class QAgent(Agent):
                 self._to_buffer(action=build_action)
                 self._to_buffer(was_trade=T.tensor([False], dtype=T.bool))
                 self._push_cache(state_key, build_action, False)
+                self.register_action(1)
                 return T.tensor((1, index)), build_action
 
             elif build_action[0] == build_action[1]:
@@ -432,6 +457,7 @@ class QAgent(Agent):
                 self._to_buffer(action=build_action)
                 self._to_buffer(was_trade=T.tensor([False], dtype=T.bool))
                 self._push_cache(state_key, build_action, False)
+                self.register_action(2)
                 return T.tensor((2, build_action[0])), build_action
             else:
                 raise RuntimeError("Invalid Build Action in QAgent")

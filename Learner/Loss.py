@@ -12,7 +12,7 @@ class Loss:
     def get_td_error(
             target_net: GameNet,
             q: T.Tensor,
-            state: T.Tensor,
+            next_state: T.Tensor,
             reward: T.Tensor,
             gamma: float,
             next_act: Optional[T.Tensor],
@@ -26,7 +26,7 @@ class Loss:
         NOTE: Assumes next action to be a build or pass action due to simplicity
         :param target_net:
         :param q:
-        :param state:
+        :param next_state:
         :param reward:
         :param gamma:
         :param next_act:
@@ -37,14 +37,14 @@ class Loss:
         :param player:
         :return:
         """
-        assert (next_act is not None) | (state.shape[0] == 1), "Passing None as next_act only available for batch size 1"
+        assert (next_act is not None) | (next_state.shape[0] == 1), "Passing None as next_act only available for batch size 1"
 
-        batch_range = T.arange(state.shape[0], dtype=T.long)
+        batch_range = T.arange(next_state.shape[0], dtype=T.long)
 
         # Get next Q from target net
         with T.no_grad():
             next_q, trade_q, _, _ = target_net(
-                state[:, -1:, :, :],
+                next_state,
                 T.ones_like(seq_lens),
                 lstm_target_state,
                 lstm_cell_state
@@ -71,6 +71,6 @@ class Loss:
         try:
             td_error = F.mse_loss(q, target_q, reduction="none")
         except:
-            1
+            print("Exception in td_error = F.mse_loss(q, target_q, reduction='none')")
 
         return td_error

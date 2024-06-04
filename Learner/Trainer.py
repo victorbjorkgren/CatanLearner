@@ -9,6 +9,7 @@ from Learner.Loss import Loss
 from Learner.Nets import GameNet
 from Learner.PrioReplayBuffer import PrioReplayBuffer
 from Learner.Utils import TensorUtils
+from Learner.constants import LOSS_CLIP, GRAD_CLIP
 
 
 class Trainer:
@@ -38,6 +39,7 @@ class Trainer:
     def find_start_tick(self):
         str_start = len("Q_Agent") + 1
         str_end = len(".pth")
+        os.makedirs('./PastTitans/', exist_ok=True)
         files = os.listdir('./PastTitans/')
         checkpoints = [int(f[str_start:-str_end]) for f in files] + [0]
         self.tick_iter = 1 + max(checkpoints)
@@ -63,22 +65,23 @@ class Trainer:
 
         sample = self.buffer.sample(self.batch_size)
 
-        inds = T.tensor(sample["inds"])
-        weights = T.tensor(sample["weights"]).to(self.q_net.on_device)
+        inds = sample["inds"]
+        weights = sample["weights"].to(self.q_net.on_device)
         batch_range = self.batch_range[:inds.shape[0]]
 
-        state = self.buffer.data['state'][inds].to(self.q_net.on_device)
-        action = self.buffer.data['action'][inds].to(self.q_net.on_device)
-        was_trade = self.buffer.data['was_trade'][inds].to(self.q_net.on_device)
-        reward = self.buffer.data['reward'][inds].to(self.q_net.on_device)
-        done = self.buffer.data['done'][inds].bool().to(self.q_net.on_device)
-        player = self.buffer.data['player'][inds].to(self.q_net.on_device)
-        seq_lens = self.buffer.data['seq_len'][inds].long()
-        lstm_state = self.buffer.data['lstm_state'][None, inds, 0, :].to(self.q_net.on_device)
-        lstm_cell = self.buffer.data['lstm_cell'][None, inds, 0, :].to(self.q_net.on_device)
+        state = sample['state'].to(self.q_net.on_device)
+        action = sample['action'].to(self.q_net.on_device)
+        was_trade = sample['was_trade'].to(self.q_net.on_device)
+        reward = sample['reward'].to(self.q_net.on_device)
+        done = sample['done'].bool().to(self.q_net.on_device)
+        player = sample['player'].to(self.q_net.on_device)
+        seq_lens = sample['seq_len'].long()
+        lstm_state = sample['lstm_state'][:, 0, :].unsqueeze(0).to(self.q_net.on_device)
+        lstm_cell = sample['lstm_cell'][:, 0, :].unsqueeze(0).to(self.q_net.on_device)
 
-        lstm_target_state = self.buffer.data['lstm_state'][None, inds, -1, :].to(self.q_net.on_device)
-        lstm_target_cell = self.buffer.data['lstm_cell'][None, inds, -1, :].to(self.q_net.on_device)
+        lstm_target_state = sample['lstm_state'][batch_range, seq_lens-2, :].unsqueeze(0).to(self.q_net.on_device)
+        lstm_target_cell = sample['lstm_cell'][batch_range, seq_lens-2, :].unsqueeze(0).to(self.q_net.on_device)
+        target_state = state[batch_range, seq_lens-2].unsqueeze(1)
 
         reward = reward * self.reward_scale
 
@@ -86,13 +89,14 @@ class Trainer:
         q = q[batch_range, :, :, :, player]
         trade_q = trade_q[batch_range, :, :, :, player]
 
-        next_act, _ = TensorUtils.get_batch_max(q[:, -1:])
+        next_q, _, _, _ = self.q_net(target_state, T.tensor([1]), lstm_target_state, lstm_target_cell)
+        next_act, _ = TensorUtils.get_batch_max(next_q[batch_range, :, :, :, player])
         q = TensorUtils.gather_actions(q, trade_q, action, was_trade)
 
         td_error = Loss.get_td_error(
             self.target_net,
             q,
-            state,
+            target_state,
             reward,
             self.gamma,
             next_act,
@@ -103,12 +107,12 @@ class Trainer:
             player
         )
 
-        td_error = T.clamp(td_error, 0., 1.)
+        td_error = T.clamp(td_error, 0., LOSS_CLIP)
         loss = (td_error * weights[:, None]).mean()  # + .001 * rule_break_loss
 
         self.optimizer.zero_grad()
         loss.backward()
-        nn.utils.clip_grad_norm_(self.q_net.parameters(), .5)
+        nn.utils.clip_grad_norm_(self.q_net.parameters(), GRAD_CLIP)
         self.optimizer.step()
 
         # Sometimes print weight info

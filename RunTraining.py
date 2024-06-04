@@ -1,7 +1,6 @@
 from collections import deque
 import threading
 
-# import torch
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
@@ -9,11 +8,11 @@ from Environment import Game
 from Learner.AgentTracker import AgentTracker
 from Learner.Agents import QAgent
 from Learner.Nets import GameNet
-from Learner.PrioReplayBuffer import PrioReplayBuffer
+from Learner.PrioReplayBuffer import PrioReplayBuffer, OnDiskBuffer
 from Learner.Trainer import Trainer
 from Learner.constants import *
 
-writer = SummaryWriter("RunLog")
+writer = SummaryWriter()
 
 game = Game(
     n_players=N_PLAYERS,
@@ -41,11 +40,13 @@ target_q_net = GameNet(learner_net_init).to(LEARNER_DEVICE)
 target_q_net.clone_state(learner_q_net)
 actor_q_net_list = [GameNet(actor_net_init).to(ACTOR_DEVICE) for _ in range(N_PLAYERS)]
 
-buffer = PrioReplayBuffer(
+buffer = OnDiskBuffer(
     alpha=REPLAY_ALPHA,
     beta=REPLAY_BETA,
     capacity=REPLAY_MEMORY_SIZE,
-    max_seq_len=MAX_SEQUENCE_LENGTH
+    max_seq_len=MAX_SEQUENCE_LENGTH,
+    preload_size=BATCH_SIZE * 4,
+    batch_size=BATCH_SIZE
 )
 trainer = Trainer(
     q_net=learner_q_net,
@@ -87,6 +88,7 @@ def learner_loop():
 
 td_loss_hist = deque(maxlen=HISTORY_DISPLAY)
 
+# learner_loop()
 learner_thread = threading.Thread(target=learner_loop)
 learner_thread.start()
 
@@ -102,11 +104,17 @@ for i in iterator:
     if done:
         game.render(training_img=True)
         agent_tracker.update_elo()
-        writer.add_scalar('TitanLastScore', agent_tracker.get_titan().episode_score, game.episode)
-        writer.add_scalar('TitanAvgScore', agent_tracker.get_titan().avg_score, game.episode)
+        titan = agent_tracker.get_titan()
+        print(titan.episode_actions)
+        writer.add_scalar('TitanLastScore', titan.episode_score, game.episode)
+        writer.add_scalar('TitanAvgScore', titan.avg_score, game.episode)
         writer.add_scalar('RandomElo', agent_tracker.random_elo, game.episode)
         writer.add_scalar('TitanElo', agent_tracker.titan_elo, game.episode)
-        writer.add_scalar('TitanBeatTime', agent_tracker.get_titan().avg_beat_time, game.episode)
+        writer.add_scalar('TitanBeatTime', titan.avg_beat_time, game.episode)
+        try:
+            writer.add_histogram('TitanActions', titan.episode_actions, game.episode, bins=range(3))
+        except ValueError:
+            pass
         writer.flush()
         for ii in range(N_PLAYERS):
             game.player_agents[ii].signal_episode_done(ii)
