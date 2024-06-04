@@ -1,6 +1,7 @@
 import warnings
 from collections import deque
 
+import torch as T
 from tqdm import tqdm
 
 from Environment import Game
@@ -12,13 +13,13 @@ warnings.filterwarnings("ignore", category=UserWarning)
 
 
 # ENVIRONMENT AND DISPLAY
-MAX_STEPS = 1_000
+MAX_STEPS = 100_000_000
 HISTORY_DISPLAY = 1_000
 N_PLAYERS = 2
 
 # LEARNER
 REWARD_MIN_FOR_LEARNING = 0
-DRY_RUN = 1024
+DRY_RUN = 2048
 BATCH_SIZE = 8
 GAMMA = .99
 
@@ -27,15 +28,15 @@ N_POWER_LAYERS = 2
 N_HIDDEN_NODES = 32
 
 # REPLAY
-REPLAY_MEMORY_SIZE = 2 ** 2  # 1024
+REPLAY_MEMORY_SIZE = 2 ** 10  # 1024
 REPLAY_ALPHA = .9
 REPLAY_BETA = .4
 
 LOAD_Q_NET = True
 LOAD_BUFFER = False
 
-# device = 'cuda' if T.cuda.is_available() else 'cpu'
-device = 'cpu'
+device = 'cuda' if T.cuda.is_available() else 'cpu'
+# device = 'cpu'
 
 game = Game(
     n_players=N_PLAYERS,
