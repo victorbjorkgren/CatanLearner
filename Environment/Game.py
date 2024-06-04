@@ -115,14 +115,21 @@ class Game:
         if build_succeeded:
             if self.first_turn_village_switch:
                 reward += 1
-            # Check if first turn has ended
-            if self.current_player == (self.n_players - 1):
-                if self.players[self.current_player].n_roads == 2:
+
+            # Give resources to all villages, done twice for simplicity of reward assignment
+            if self.players[self.current_player].n_roads == 2:
+                face_hits = T.nonzero(self.board.state.face_attr)
+                for hit in face_hits:
+                    self.give_resource(hit)
+                good_place_to_start = self.players[self.current_player].hand >= T.tensor([1, 1, 0, 1, 1])
+                if good_place_to_start.all():
+                    reward += 1
+
+                # Check if first turn has ended
+                if self.current_player == (self.n_players - 1):
                     self.first_turn = False
-                    # Give resources to all villages
-                    face_hits = T.nonzero(self.board.state.face_attr)
-                    for hit in face_hits:
-                        self.give_resource(hit)
+
+            # Switch active player and first turn switch
             self.current_player = (self.current_player + 1) % self.n_players
             if self.current_player == 0:
                 self.first_turn_village_switch = not self.first_turn_village_switch
