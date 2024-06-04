@@ -36,91 +36,91 @@ class Trainer:
     def train(self) -> float:
         assert self.available_agents is not None, 'Trainer: No available agents'
 
-        try:
-
-            self.tick += 1
-            if self.tick < self.dry_run:
-                return 0.
-
-            agent = self.choose_agent()
-
-            if agent.mem_size < self.batch_size:
-                return 0.
-            else:
-                sample = agent.sample(self.batch_size)
-
-            inds = T.tensor(sample["inds"])
-            weights = T.tensor(sample["weights"]).to(self.q_net.on_device)
-            batch_range = self.batch_range[:inds.shape[0]]
-
-            state = agent.data['state'][inds].to(self.q_net.on_device)
-            action = agent.data['action'][inds].to(self.q_net.on_device)
-            reward = agent.data['reward'][inds].to(self.q_net.on_device)
-            done = agent.data['done'][inds].bool().to(self.q_net.on_device)
-            player = agent.data['player'][inds].to(self.q_net.on_device)
-            seq_lens = agent.data['seq_len'][inds].long()
-            lstm_state = agent.data['lstm_state'][None, inds, 0, :].to(self.q_net.on_device)
-            lstm_cell = agent.data['lstm_cell'][None, inds, 0, :].to(self.q_net.on_device)
-
-            lstm_target_state = agent.data['lstm_state'][None, inds, -1, :].to(self.q_net.on_device)
-            lstm_cell_state = agent.data['lstm_cell'][None, inds, -1, :].to(self.q_net.on_device)
-
-            # TODO: Check Norm of samples
-            q, _, _ = self.q_net(state, seq_lens, lstm_state, lstm_cell)
-            q = q[batch_range, :, :, :, player]
-
-            next_act, _ = self.get_batch_max(q[:, -1:])
-            q = self.gather_actions(q, action)
-
-            # Get next Q from target net
-            with T.no_grad():
-                next_q, _, _ = self.target_net(
-                    state[:, -1:, :, :],
-                    T.ones_like(seq_lens),
-                    lstm_target_state,
-                    lstm_cell_state
-                )
-                next_q = next_q[batch_range, :, :, :, player]
-                next_q = self.gather_actions(next_q, next_act)
-
-            reward[~done, seq_lens-1] = next_q[~done, 0]
-            reward = self.propagate_rewards(reward)
-            target_q = reward[:, :-1]
-
-            for i in range(q.shape[0]):
-                if seq_lens[i] == q.shape[1]:
-                    continue
-                q[i, seq_lens[i]:] = 0
-
-            q = q[:, :-1]
-
-            # Calculate loss
-            td_error = F.mse_loss(q, target_q, reduction="none")
-            loss = (td_error * weights[:, None]).mean()  # + .001 * rule_break_loss
-
-            self.optimizer.zero_grad()
-            loss.backward()
-            nn.utils.clip_grad_norm_(self.q_net.parameters(), .5)
-            self.optimizer.step()
-
-            # Sometimes print weight info
-            if self.tick % 1000 == 0:
-                for name, module in self.q_net.named_modules():
-                    if hasattr(module, 'weight') and module.weight is not None:
-                        weight_max = T.max(module.weight).item()
-                        grad_max = T.max(module.weight.grad).item()
-                        print(f"{name}: Max weight = {weight_max:.4e} - Max grad = {grad_max:.4e}")
-
-            # Update others
-            if self.tick % 100 == 0:
-                self.target_net.clone_state(self.q_net)
-
-            agent.update_prio(inds, td_error.mean(-1).detach().cpu().numpy())
-
-            return td_error.mean().item() #, rule_break_loss.item()
-
-        except:
+        self.tick += 1
+        if self.tick < self.dry_run:
             return 0.
+
+        agent = self.choose_agent()
+
+        if agent.mem_size < self.batch_size:
+            return 0.
+        else:
+            sample = agent.sample(self.batch_size)
+
+        inds = T.tensor(sample["inds"])
+        weights = T.tensor(sample["weights"]).to(self.q_net.on_device)
+        batch_range = self.batch_range[:inds.shape[0]]
+
+        state = agent.data['state'][inds].to(self.q_net.on_device)
+        action = agent.data['action'][inds].to(self.q_net.on_device)
+        reward = agent.data['reward'][inds].to(self.q_net.on_device)
+        done = agent.data['done'][inds].bool().to(self.q_net.on_device)
+        player = agent.data['player'][inds].to(self.q_net.on_device)
+        seq_lens = agent.data['seq_len'][inds].long()
+        lstm_state = agent.data['lstm_state'][None, inds, 0, :].to(self.q_net.on_device)
+        lstm_cell = agent.data['lstm_cell'][None, inds, 0, :].to(self.q_net.on_device)
+
+        lstm_target_state = agent.data['lstm_state'][None, inds, -1, :].to(self.q_net.on_device)
+        lstm_cell_state = agent.data['lstm_cell'][None, inds, -1, :].to(self.q_net.on_device)
+
+        # TODO: Check Norm of samples
+        q, _, _ = self.q_net(state, seq_lens, lstm_state, lstm_cell)
+        q = q[batch_range, :, :, :, player]
+
+        next_act, _ = self.get_batch_max(q[:, -1:])
+        q = self.gather_actions(q, action)
+
+        # Get next Q from target net
+        with T.no_grad():
+            next_q, _, _ = self.target_net(
+                state[:, -1:, :, :],
+                T.ones_like(seq_lens),
+                lstm_target_state,
+                lstm_cell_state
+            )
+            next_q = next_q[batch_range, :, :, :, player]
+            next_q = self.gather_actions(next_q, next_act)
+
+        reward[~done, seq_lens[~done.cpu()]-1] = next_q[~done, 0]
+        reward = self.propagate_rewards(reward)
+        target_q = reward[:, :-1]
+
+        for i in range(q.shape[0]):
+            if seq_lens[i] == q.shape[1]:
+                continue
+            q[i, seq_lens[i]:] = 0
+            target_q[i, seq_lens[i]:] = 0
+
+        q = q[:, :-1]
+
+        # Calculate loss
+        td_error = F.mse_loss(q, target_q, reduction="none")
+        loss = (td_error * weights[:, None]).mean()  # + .001 * rule_break_loss
+
+        self.optimizer.zero_grad()
+        loss.backward()
+        nn.utils.clip_grad_norm_(self.q_net.parameters(), .5)
+        self.optimizer.step()
+
+        # Sometimes print weight info
+        if self.tick % 1000 == 0:
+            for name, module in self.q_net.named_modules():
+                if hasattr(module, 'weight') and module.weight is not None:
+                    weight_max = T.max(module.weight).item()
+                    grad_max = T.max(module.weight.grad).item()
+                    print(f"{name}: Max weight = {weight_max:.4e} - Max grad = {grad_max:.4e}")
+
+        # Update others
+        if self.tick % 100 == 0:
+            self.target_net.clone_state(self.q_net)
+
+        agent.update_prio(inds, td_error.mean(-1).detach().cpu().numpy())
+
+        return td_error.mean().item()  #, rule_break_loss.item()
+
+        # except Exception as e:
+        #     print(e)
+        #     return 0.
 
     def register_agents(self, agents: List[BaseAgent]):
         self.available_agents = agents
