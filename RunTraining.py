@@ -1,5 +1,8 @@
-from collections import deque
+import warnings
 
+warnings.filterwarnings("ignore", category=UserWarning)
+
+from collections import deque
 import torch as T
 from tqdm import tqdm
 
@@ -16,7 +19,7 @@ N_PLAYERS = 2
 # LEARNER
 REWARD_MIN_FOR_LEARNING = 0
 DRY_RUN = 256
-BATCH_SIZE = 64
+BATCH_SIZE = 8
 GAMMA = .99
 
 # NETWORK
@@ -24,7 +27,7 @@ N_POWER_LAYERS = 2
 N_HIDDEN_NODES = 32
 
 # REPLAY
-REPLAY_MEMORY_SIZE = 2 ** 13  # 8192
+REPLAY_MEMORY_SIZE = 2 ** 10  # 1024
 REPLAY_ALPHA = .9
 REPLAY_BETA = .4
 
@@ -90,14 +93,9 @@ td_loss_hist = deque(maxlen=HISTORY_DISPLAY)
 iterator = tqdm(range(MAX_STEPS))
 for i in iterator:
     observation, obs_player = q_net.get_dense(game)
-    action, raw_action = game.current_agent.sample_action(
-        game,
-        observation,
-        i_am_player=game.current_player,
-        remember=True
-    )
+    action, raw_action = game.current_agent.sample_action(observation, i_am_player=game.current_player)
     reward, done, succeeded = game.step(action)
-    game.player_agents[obs_player].update_reward(reward, done)
+    game.player_agents[obs_player].update_reward(reward, done, obs_player)
 
     # Training tick
     td_loss = trainer.train()
@@ -106,7 +104,7 @@ for i in iterator:
     # On episode termination
     if done:
         for ii in range(N_PLAYERS):
-            game.player_agents[ii].update_reward(None, done)
+            game.player_agents[ii].signal_episode_done(ii)
             game.player_agents[ii].clear_cache()
         game.render(training_img=True)
         agent_list.reverse()

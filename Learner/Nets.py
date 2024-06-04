@@ -1,9 +1,10 @@
-from typing import Tuple
+from typing import Tuple, List
 
 import torch
 import torch as T
 import torch.nn as nn
 import torch_geometric as pyg
+from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 
 from Environment import Game
 from .Utils import extract_attr, sparse_face_matrix, preprocess_adj, sparse_misc_node, get_masks
@@ -45,8 +46,11 @@ class PlayerNet(nn.Module):
         return output
 
 
-def nn_sum(tensor: T.Tensor) -> T.Tensor:
-    return tensor.permute(0, 3, 1, 2).sum(dim=-2, keepdim=True).sum(-1, keepdim=True).permute(0, 2, 3, 1)
+def nn_sum(tensor: T.Tensor, dims: List[int]) -> T.Tensor:
+    for dim in dims:
+        tensor = tensor.sum(dim, keepdim=True)
+    return tensor
+    # return tensor.permute(0, 3, 1, 2).sum(dim=-2, keepdim=True).sum(-1, keepdim=True).permute(0, 2, 3, 1)
 
 
 class GameNet(nn.Module):
@@ -79,13 +83,15 @@ class GameNet(nn.Module):
         self.sparse_pass_node = sparse_misc_node(sparse_edge.max(), self.sparse_face.max() + 1, to_undirected=True)
         self.sparse_full = T.cat((self.sparse_edge, self.sparse_face, self.sparse_pass_node), dim=1)
 
-        # TODO: Fix Magic Numbers
+        # TODO: Remove Magic Numbers
         self.node_adj = T.eye(74, dtype=T.long).unsqueeze(0)
         self.node_adj[:, 54:, 54:] = 0
+        self.node_adj[:, -1, -1] = 1
         self.edge_adj = pyg.utils.to_dense_adj(self.sparse_edge, max_num_nodes=74)
         self.face_adj = pyg.utils.to_dense_adj(self.sparse_face, max_num_nodes=74)
         self.face_adj = self.face_adj + T.eye(self.face_adj.shape[-1])
-        self.face_adj[0, self.node_adj[0]] = 0
+        self.face_adj[self.node_adj > 0] = 0
+        self.face_adj[:, -1, -1] = 0
         self.full_adj = pyg.utils.to_dense_adj(self.sparse_full)
         self.full_adj = self.full_adj + T.eye(self.full_adj.shape[-1])
         self.full_mask = self.full_adj > 0
@@ -100,10 +106,12 @@ class GameNet(nn.Module):
         self.action_mask = (self.node_adj > 0) | (self.edge_adj > 0)
         self.action_mask[:, -1, -1] = True
 
-        self.node_mask = self.node_mask.flatten()
-        self.edge_mask = self.edge_mask.flatten()
-        self.face_mask = self.face_mask.flatten()
-        self.full_mask = self.full_mask.flatten()
+        self.n_possible_actions = self.action_mask.sum()
+
+        self.node_mask = self.node_mask.view((1, -1)).squeeze()
+        self.edge_mask = self.edge_mask.view((1, -1)).squeeze()
+        self.face_mask = self.face_mask.view((1, -1)).squeeze()
+        self.full_mask = self.full_mask.view((1, -1)).squeeze()
 
         self.face_adj_norm = preprocess_adj(self.face_adj, batch_size, add_self_loops=False)
         self.edge_adj_norm = preprocess_adj(self.edge_adj, batch_size, add_self_loops=False)
@@ -115,6 +123,8 @@ class GameNet(nn.Module):
 
         self.action_value = MLP(n_embed, n_output, final=True)
         self.state_value = MLP(n_embed, n_output, final=True)
+
+        self.lstm = nn.LSTM(n_embed, n_embed, batch_first=True)
 
         self.power_layers = nn.Sequential(*[
 
@@ -130,48 +140,84 @@ class GameNet(nn.Module):
         if load_state:
             self.load()
 
-    def forward(self, observation: T.Tensor) -> T.Tensor:
-        observation = observation.to(self.on_device)
-        mask = ~self.action_mask.unsqueeze(-1).repeat(observation.shape[0], 1, 1, self.n_output).to(self.on_device)
+    def forward(self,
+                observation: T.Tensor,
+                seq_lengths: T.Tensor,
+                h_in: T.Tensor,
+                c_in: T.Tensor
+                ) -> Tuple[T.Tensor, T.Tensor, T.Tensor]:
 
-        obs_matrix = self.feature_embedding(observation)
+        assert len(observation.shape) == 5, "QNet wants [B, T, N, N, F]"
+
+        obs_matrix = observation.to(self.on_device)
+        h_in = h_in.to(self.on_device)
+        c_in = c_in.to(self.on_device)
+
+        obs_matrix = self.feature_embedding(obs_matrix)
         obs_matrix = self.power_layers(obs_matrix)
+        obs_matrix, hn, cn = self.temporal_layer(obs_matrix, seq_lengths, h_in, c_in)
+        action_matrix, state_matrix = self.action_value_heads(obs_matrix)
 
-        action_matrix = self.action_value(obs_matrix)
-        state_matrix = self.state_value(obs_matrix)
-
-        action_matrix[mask] = 0
-        state_matrix[mask] = 0
-
-        mean_action = nn_sum(action_matrix) / nn_sum(mask)
-
+        mean_action = nn_sum(action_matrix, [2, 3]) / self.n_possible_actions
         q_matrix = action_matrix + (state_matrix - mean_action)
-        q_matrix[mask] = -T.inf
-        return q_matrix
+
+        # Mask invalid actions
+        b, s, n, _, f = q_matrix.shape
+        neg_mask = ~self.action_mask[None, :, :, :, None].repeat(b, s, 1, 1, f)
+        q_matrix[neg_mask] = -T.inf
+        return q_matrix, hn, cn
+
+    def temporal_layer(
+            self,
+            obs_matrix: T.Tensor,
+            seq_lengths: T.Tensor,
+            h_in: T.Tensor,
+            c_in: T.Tensor
+    ) -> Tuple[T.Tensor, T.Tensor, T.Tensor]:
+
+        packed_matrix = pack_padded_sequence(
+            obs_matrix[:, :, -1, -1, :],
+            seq_lengths,
+            batch_first=True,
+            enforce_sorted=False
+        )
+        packed_matrix, (hn, cn) = self.lstm(packed_matrix, (h_in, c_in))
+        temporal_matrix, _ = pad_packed_sequence(packed_matrix, batch_first=True)
+
+        assert temporal_matrix.shape[1] == obs_matrix.shape[1], "LSTM Sequence Length Output mismatch"
+
+        obs_matrix = temporal_matrix[:, :, None, None, :] + obs_matrix
+
+        return obs_matrix, hn, cn
 
     def feature_embedding(self, observation):
-        batch = observation.shape[0]
-        f = observation.shape[-1]
+        batch, seq, n, _, f = observation.shape
 
-        observation = observation.permute(0, 3, 1, 2).reshape((batch, f, -1))
-        obs_matrix = (self.state_matrix.clone()
-                      .repeat((batch, 1, 1, 1))
-                      .reshape((batch, self.n_embed, -1))
-                      .permute(0, 2, 1))
+        x_flat = observation.view(batch * seq, n * n, f)
+        obs_matrix = T.zeros((batch * seq, n * n, self.n_embed), dtype=T.float).to(self.on_device)
 
-        node_f = observation[:, :, self.node_mask].permute(0, 2, 1)
-        edge_f = observation[:, :, self.edge_mask].permute(0, 2, 1)
-        face_f = observation[:, :6, self.face_mask].permute(0, 2, 1)
+        obs_matrix[:, self.node_mask] = self.node_embed(x_flat[:, self.node_mask])
+        obs_matrix[:, self.edge_mask] = self.edge_embed(x_flat[:, self.edge_mask])
+        obs_matrix[:, self.face_mask] = self.face_embed(x_flat[:, self.face_mask, :6])
 
-        obs_matrix[:, self.node_mask, :] = self.node_embed(node_f)
-        obs_matrix[:, self.edge_mask, :] = self.edge_embed(edge_f)
-        obs_matrix[:, self.face_mask, :] = self.face_embed(face_f)
-
-        obs_matrix = (obs_matrix
-                      .permute(0, 2, 1)
-                      .reshape((batch, 74, 74, self.n_embed)))
+        obs_matrix = obs_matrix.reshape(batch, seq, n, n, self.n_embed)
 
         return obs_matrix
+
+    def action_value_heads(self, observation):
+        batch, seq, n, _, f = observation.shape
+
+        x_flat = observation.view(batch * seq, n * n, f)
+        action_matrix = T.zeros((batch * seq, n * n, self.n_output), dtype=T.float).to(self.on_device)
+        state_matrix = T.zeros((batch * seq, n * n, self.n_output), dtype=T.float).to(self.on_device)
+
+        action_matrix[:, self.full_mask] = self.action_value(x_flat[:, self.full_mask])
+        state_matrix[:, self.full_mask] = self.state_value(x_flat[:, self.full_mask])
+
+        action_matrix = action_matrix.reshape(batch, seq, n, n, self.n_output)
+        state_matrix = state_matrix.reshape(batch, seq, n, n, self.n_output)
+
+        return action_matrix, state_matrix
 
     def clone_state(self, other):
         self.load_state_dict(other.state_dict())
@@ -188,7 +234,7 @@ class GameNet(nn.Module):
         p1_mask = self.mask_util(game, 1).squeeze()
         p_mask = T.stack((p0_mask, p1_mask), dim=-1).unsqueeze(0)
         mask = T.zeros(1, 74, 74, 2)
-        mask[:,:54,:54,:] = p_mask
+        mask[:, :54, :54, :] = p_mask
         mask[:, -1, -1, :] = True
 
         # Normalize-ish
