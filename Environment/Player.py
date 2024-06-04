@@ -25,14 +25,14 @@ class Player:
             for i in range(len(self.hand)):
                 self.hand[i] -= self.hand[i] // 2
 
-    def sample_action(self):
-        return self.agent.sample_action()
+    def sample_action(self, board, players, i_am_player):
+        return self.agent.sample_action(board, players, i_am_player)
 
     def __str__(self):
         # [Bricks, Grains, Ores, Lumbers, Wools]
-        return ((f"Brick: {self.hand[0]:0d}, "
-                 f"Grain: {self.hand[1]}, "
-                 f"Ore: {self.hand[2]}, "
-                 f"Lumber: {self.hand[3]}, "
-                 f"Wool: {self.hand[4]}")
-                + f"\nPoints: {self.points}")
+        return ((f"{int(self.hand[0])} Brick\n"
+                 f"{int(self.hand[1])} Grain\n"
+                 f"Ore: {int(self.hand[2])} Ore\n"
+                 f"Lumber: {int(self.hand[3])} Lumber\n"
+                 f"Wool: {int(self.hand[4])} Wool\n")
+                + f"\n{int(self.points)} Points")
