@@ -194,13 +194,15 @@ class GameNet(nn.Module):
             h_in: T.Tensor,
             c_in: T.Tensor
     ) -> Tuple[T.Tensor, T.Tensor, T.Tensor]:
-
-        packed_matrix = pack_padded_sequence(
-            obs_matrix[:, :, -1, -1, :],
-            seq_lengths,
-            batch_first=True,
-            enforce_sorted=False
-        )
+        try:
+            packed_matrix = pack_padded_sequence(
+                obs_matrix[:, :, -1, -1, :],
+                seq_lengths,
+                batch_first=True,
+                enforce_sorted=False
+            )
+        except RuntimeError:
+            breakpoint()
         packed_matrix, (hn, cn) = self.lstm(packed_matrix, (h_in, c_in))
         temporal_matrix, _ = pad_packed_sequence(packed_matrix, batch_first=True)
 
