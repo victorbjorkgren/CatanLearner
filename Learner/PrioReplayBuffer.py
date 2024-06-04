@@ -39,7 +39,7 @@ class PrioReplayBuffer:
         # TODO: Make board size and n_player invariant
         # TODO: Fix Magic Numbers
         self.data = {
-            'state': T.zeros((capacity, 74, 74, 14), dtype=T.float),
+            'state': T.zeros((capacity, 74, 74, 16), dtype=T.float),
             'state_mask': T.zeros((capacity, 74, 74, 1), dtype=T.bool),
             'action': T.zeros((capacity, 2), dtype=T.long),
             'reward': T.zeros((capacity,), dtype=T.float),
@@ -56,7 +56,7 @@ class PrioReplayBuffer:
         self._next_idx = 0
         self._size = 0
 
-    def add(self, state, state_mask, action, reward, done, episode, player) -> None:
+    def add(self, state, action, reward, done, episode, player) -> None:
         # if self.is_full:
         #     idx = self.min_prio_idx
         # else:
@@ -69,7 +69,7 @@ class PrioReplayBuffer:
             action = action.squeeze()
 
         self.data['state'][idx] = state
-        self.data['state_mask'][idx, :54, :54, 0] = state_mask
+        # self.data['state_mask'][idx, :54, :54, 0] = state_mask
         self.data['action'][idx] = action.long()
         self.data['reward'][idx] = reward
         self.data['done'][idx] = done
@@ -103,9 +103,9 @@ class PrioReplayBuffer:
         self.data['prio'][ind] = clipped_prio
         self._sum_priority = self.data['prio'].sum()
 
-    def update_reward(self, reward: int) -> None:
+    def update_reward(self, reward: float, done: bool) -> None:
         self.data['reward'][self._next_idx - 1] = reward
-        self.data['done'][self._next_idx - 1] = True
+        self.data['done'][self._next_idx - 1] = done
 
     # def add_to_buffer(self, key, value) -> bool:
     #     """returns True if buffer was flushed"""

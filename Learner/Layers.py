@@ -79,6 +79,9 @@ class PowerfulLayer(nn.Module):
         out1 = self.m1(matrix).permute(0, 3, 1, 2)  # batch, out_feat, N, N
         out2 = self.m2(matrix).permute(0, 3, 1, 2)  # batch, out_feat, N, N
 
+        out1 = out1 * self.mask
+        out2 = out2 * self.mask
+
         # Message Propagation
         out = out1 @ out2
         del out1, out2
@@ -91,7 +94,7 @@ class PowerfulLayer(nn.Module):
 
         # Reshape and Norm
         # out = (adj_norm @ out).permute(0, 2, 3, 1)
-        return out * self.adj_norm
+        return out
 
         # # Return Gated Residual
         # out = T.cat((out, matrix), dim=3)  # batch, N, N, out_feat

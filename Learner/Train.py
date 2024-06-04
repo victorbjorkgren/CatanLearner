@@ -33,17 +33,17 @@ class Trainer():
 
         self.known_allowed_states = None
 
-    def train(self) -> Tuple[float, float]:
+    def train(self) -> float:
         assert self.available_agents is not None, 'Trainer: No available agents'
 
         self.tick += 1
         if self.tick < self.dry_run:
-            return 0., 0.
+            return 0.
 
         agent = self.choose_agent()
 
         if agent.mem_size < self.batch_size:
-            return 0., 0.
+            return 0.
         else:
             sample = agent.sample(self.batch_size)
 
@@ -62,7 +62,7 @@ class Trainer():
         batch_range = self.batch_range[:inds.shape[0]]
 
         state = agent.data['state'][inds].to(self.q_net.on_device)
-        state_mask = agent.data['state_mask'][inds].to(self.q_net.on_device)
+        # state_mask = agent.data['state_mask'][inds].to(self.q_net.on_device)
         new_state = agent.data['state'][next_inds].to(self.q_net.on_device)
         action = agent.data['action'][inds].to(self.q_net.on_device)
         reward = agent.data['reward'][inds].to(self.q_net.on_device)
@@ -71,7 +71,7 @@ class Trainer():
 
         # TODO: Check Norm of samples
         q = self.q_net(state)[batch_range, :, :, player]
-        rule_breaking_q = self.get_rule_break_q(q.detach(), state_mask)
+        # rule_breaking_q = self.get_rule_break_q(q.detach(), state_mask)
         q = q[batch_range, action[:, 0], action[:, 1]]
 
         # Get next action
@@ -90,11 +90,11 @@ class Trainer():
         td_error = F.mse_loss(q, target_q, reduction="none")
         td_error = td_error.clamp_max(2.)
 
-        rule_break_loss = T.mean(rule_breaking_q ** 2)
-        rule_break_loss = rule_break_loss.clamp_max(1.)
+        # rule_break_loss = T.mean(rule_breaking_q ** 2)
+        # rule_break_loss = rule_break_loss.clamp_max(1.)
 
         agent.update_prio(inds, td_error.detach().cpu().numpy())
-        loss = (td_error * weights).mean() + .001 * rule_break_loss
+        loss = (td_error * weights).mean()  # + .001 * rule_break_loss
 
         self.optimizer.zero_grad()
         loss.backward()
@@ -103,7 +103,7 @@ class Trainer():
         if self.tick % 100 == 0:
             self.target_net.clone_state(self.q_net)
 
-        return td_error.mean().item(), rule_break_loss.item()
+        return td_error.mean().item() #, rule_break_loss.item()
 
     def register_agents(self, agents: List[BaseAgent]):
         self.available_agents = agents

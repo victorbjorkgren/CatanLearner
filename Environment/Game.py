@@ -1,6 +1,6 @@
 import os
 import random
-from typing import Any
+from typing import Any, Tuple
 
 import matplotlib.pyplot as plt
 import networkx as nx
@@ -15,7 +15,7 @@ from .constants import *
 
 
 class Game:
-    def __init__(self, n_players, max_turns=500, max_no_progress=50, start_episode=0):
+    def __init__(self, n_players, failed_action_penalty=-.01, max_turns=500, max_no_progress=50, start_episode=0):
         self.max_no_progress = max_no_progress
         self.n_players = n_players
         self.max_turns = max_turns
@@ -31,9 +31,10 @@ class Game:
 
         # Placeholder inits
         self.board = Board(self.n_players)
-        self.players = [Player(RandomAgent(capacity=1, alpha=1, beta=1)) for _ in range(self.n_players)]
+        self.players = [Player(None)] * self.n_players
 
-        self.zero_reward = T.zeros((self.n_players,))
+        self.zero_reward = 0
+        self.failed_action_penalty = failed_action_penalty
         self.listeners = dict()
 
     @property
@@ -56,12 +57,16 @@ class Game:
         assert len(player_agents) == self.n_players
         self.player_agents = player_agents
 
-    def step(self, action: tuple[int, int], render: bool = False) -> tuple[T.Tensor, bool, bool]:
+    def step(self, action: tuple[int, int], render: bool = False) -> tuple[float, bool, bool]:
         """Take one action step in the game. Returns reward, done, and the actual action."""
         succeeded = True
+        reward = 0.
         if self.first_turn:
-            self.first_turn_step(action)
-            return self.zero_reward, False, succeeded
+            succeeded, reward = self.first_turn_step(action)
+            if succeeded:
+                return reward, False, True
+            else:
+                return self.failed_action_penalty + reward, False, True
 
         if action[0] == 1:
             if not self.build_road(action[1], self.current_player):
@@ -70,6 +75,8 @@ class Game:
         elif action[0] == 2:
             if not self.build_village(action[1], self.current_player):
                 succeeded = False
+            else:
+                reward += 1
 
         if (action[0] == 0) | (not succeeded):
             self.idle_turns += 1
@@ -82,22 +89,32 @@ class Game:
             self.idle_turns = 0
 
         if self.game_on():
-            return self.zero_reward, False, succeeded
+            return (not succeeded) * self.failed_action_penalty, False, succeeded
         else:
-            points = T.tensor([e.points for e in self.players])
+            # points = T.tensor([e.points for e in self.players])
+            points = self.players[self.current_player].points
             winner = points >= 10
-            if winner.sum() >= 1:
-                rewards = winner.float() * 2 - 1
+            if winner:
+                rewards = 1.
             else:
-                rewards = T.zeros_like(winner, dtype=T.float)
+                rewards = 0.
             return rewards, True, succeeded
 
-    def first_turn_step(self, action) -> None:
+    def first_turn_step(self, action) -> Tuple[bool, float]:
+        reward = 0.
         if self.first_turn_village_switch:
-            build_succeeded = self.build_village(action[1], self.current_player, first_turn=True)
+            if action[0] == 2:
+                build_succeeded = self.build_village(action[1], self.current_player, first_turn=True)
+            else:
+                build_succeeded = False
         else:
-            build_succeeded = self.build_road(action[1], self.current_player, first_turn=True)
+            if action[0] == 1:
+                build_succeeded = self.build_road(action[1], self.current_player, first_turn=True)
+            else:
+                build_succeeded = False
         if build_succeeded:
+            if self.first_turn_village_switch:
+                reward += 1
             # Check if first turn has ended
             if self.current_player == (self.n_players - 1):
                 if self.players[self.current_player].n_roads == 2:
@@ -109,6 +126,9 @@ class Game:
             self.current_player = (self.current_player + 1) % self.n_players
             if self.current_player == 0:
                 self.first_turn_village_switch = not self.first_turn_village_switch
+            return True, reward
+        else:
+            return False, reward
 
     def take_first_turn(self):
         for player in range(self.n_players):
