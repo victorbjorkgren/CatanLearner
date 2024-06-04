@@ -37,9 +37,10 @@ class Loss:
         :param player:
         :return:
         """
-        assert (next_act is not None) | (state.shape[0] == 1), "Passing None as next_act only available for 1 size batches"
+        assert (next_act is not None) | (state.shape[0] == 1), "Passing None as next_act only available for batch size 1"
 
         batch_range = T.arange(state.shape[0], dtype=T.long)
+
         # Get next Q from target net
         with T.no_grad():
             next_q, trade_q, _, _ = target_net(
@@ -50,7 +51,7 @@ class Loss:
             )
             next_q = next_q[batch_range, :, :, :, player]
             if next_act is None:
-                next_q = next_q.max().view((1,-1))
+                next_q = next_q.max().view((1, -1))
             else:
                 next_q = TensorUtils.gather_actions(next_q, trade_q, next_act, None)
 
@@ -67,6 +68,9 @@ class Loss:
         q = q[:, :-1]
 
         # Calculate loss
-        td_error = F.mse_loss(q, target_q, reduction="none")
+        try:
+            td_error = F.mse_loss(q, target_q, reduction="none")
+        except:
+            1
 
         return td_error
