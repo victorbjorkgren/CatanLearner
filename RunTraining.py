@@ -8,18 +8,25 @@ from Learner.Agents import RandomAgent, QAgent
 from Learner.Nets import GameNet
 from Learner.Train import Trainer
 
+# ENVIRONMENT AND DISPLAY
 MAX_STEPS = 100_000_000
 HISTORY_DISPLAY = 1_000
 N_PLAYERS = 2
 
+# LEARNER
+REWARD_MIN_FOR_LEARNING = 0
 DRY_RUN = 256
 BATCH_SIZE = 64
+GAMMA = .99
 
+# NETWORK
+N_POWER_LAYERS = 2
+N_HIDDEN_NODES = 32
+
+# REPLAY
 REPLAY_MEMORY_SIZE = 2 ** 13  # 8192
-REPLAY_ALPHA = .7
-REPLAY_BETA = .2
-
-REWARD_MIN_FOR_Q = 0
+REPLAY_ALPHA = .9
+REPLAY_BETA = .4
 
 LOAD_Q_NET = False
 LOAD_BUFFER = False
@@ -29,20 +36,20 @@ device = 'cuda' if T.cuda.is_available() else 'cpu'
 
 game = Game(
     n_players=N_PLAYERS,
-    max_turns=500
+    max_turns=300
 )
 q_net = GameNet(
     game=game,
-    n_power_layers=4,
-    n_embed=32,
+    n_power_layers=N_POWER_LAYERS,
+    n_embed=N_HIDDEN_NODES,
     n_output=N_PLAYERS,
     on_device=device,
     load_state=LOAD_Q_NET
 )
 target_net = GameNet(
     game=game,
-    n_power_layers=4,
-    n_embed=32,
+    n_power_layers=N_POWER_LAYERS,
+    n_embed=N_HIDDEN_NODES,
     n_output=N_PLAYERS,
     on_device=device,
     load_state=LOAD_Q_NET
@@ -52,8 +59,8 @@ trainer = Trainer(
     target_net=target_net,
     batch_size=BATCH_SIZE,
     dry_run=DRY_RUN,
-    reward_min=REWARD_MIN_FOR_Q,
-    gamma=.9,
+    reward_min=REWARD_MIN_FOR_LEARNING,
+    gamma=GAMMA,
 )
 target_net.clone_state(q_net)
 q_net = q_net.to(device)
@@ -80,7 +87,6 @@ game.reset()
 
 td_loss, rule_loss = 0, 0
 td_loss_hist = deque(maxlen=HISTORY_DISPLAY)
-rule_loss_hist = deque(maxlen=HISTORY_DISPLAY)
 iterator = tqdm(range(MAX_STEPS))
 for i in iterator:
     observation, obs_player = q_net.get_dense(game)
@@ -93,24 +99,14 @@ for i in iterator:
     reward, done, succeeded = game.step(action)
     game.player_agents[obs_player].update_reward(reward, done)
 
-    # Should not trigger
-    # if not succeeded:
-        # print(f'Invalid action {raw_action.tolist()} by player {obs_player}')
-        # raw_action = T.tensor((73, 73))
-
     # Training tick
     td_loss = trainer.train()
     td_loss_hist.append(td_loss)
 
     # On episode termination
     if done:
-        if reward > 0:
-            final_reward = [-reward] * N_PLAYERS
-            final_reward[obs_player] = reward
-        else:
-            final_reward = [0] * N_PLAYERS
         for ii in range(N_PLAYERS):
-            game.player_agents[ii].update_reward(final_reward[ii], done)
+            game.player_agents[ii].update_reward(None, done)
             game.player_agents[ii].clear_cache()
         game.render(training_img=True)
         agent_list.reverse()

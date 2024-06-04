@@ -65,7 +65,7 @@ class PowerfulLayer(nn.Module):
 
         self.m1 = MLP(in_features, out_features, feature_dim=-1)
         self.m2 = MLP(in_features, out_features, feature_dim=-1)
-        self.g1 = MLP(2 * in_features, out_features)
+        # self.g1 = MLP(2 * in_features, out_features)
 
     def forward(self, matrix: T.Tensor) -> T.Tensor:
         """
@@ -93,17 +93,13 @@ class PowerfulLayer(nn.Module):
 
         # Message Propagation
         out = out1 @ out2
-        del out1, out2
+        # del out1, out2
+        #
+        # # Add Gated Residual
+        # out = T.cat((out.permute(0, 2, 3, 1), matrix), dim=3)  # batch, N, N, out_feat
+        # out = self.g1(out)
 
-        # Add Gated Residual
-        out = T.cat((out.permute(0, 2, 3, 1), matrix), dim=3)  # batch, N, N, out_feat
-        del matrix
-
-        out = self.g1(out)  # .permute(0, 3, 1, 2)
-
-        # Reshape and Norm
-        # out = (adj_norm @ out).permute(0, 2, 3, 1)
-        return out
+        return out.permute(0, 2, 3, 1) + matrix
 
         # # Return Gated Residual
         # out = T.cat((out, matrix), dim=3)  # batch, N, N, out_feat

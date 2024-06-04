@@ -116,12 +116,12 @@ class GameNet(nn.Module):
         self.action_value = MLP(n_embed, n_output, final=True)
         self.state_value = MLP(n_embed, n_output, final=True)
 
-        self.power_layers = [
+        self.power_layers = nn.Sequential(*[
 
             PowerfulLayer(n_embed, n_embed, self.full_adj_norm.to(self.on_device)).to(self.on_device)
             for _ in range(n_power_layers)
 
-        ]
+        ])
 
         self.state_matrix = self.state_matrix.to(self.on_device)
         self.full_mask = self.full_mask.to(self.on_device)
@@ -135,8 +135,7 @@ class GameNet(nn.Module):
         mask = ~self.action_mask.unsqueeze(-1).repeat(observation.shape[0], 1, 1, self.n_output).to(self.on_device)
 
         obs_matrix = self.feature_embedding(observation)
-        for power_layer in self.power_layers:
-            obs_matrix = obs_matrix + power_layer(obs_matrix)
+        obs_matrix = self.power_layers(obs_matrix)
 
         action_matrix = self.action_value(obs_matrix)
         state_matrix = self.state_value(obs_matrix)

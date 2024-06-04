@@ -51,7 +51,6 @@ class Game:
         self.first_turn = True
         self.first_turn_village_switch = True
         self.publish('reset')
-        self.render()
 
     def register_agents(self, player_agents: [BaseAgent, BaseAgent]):
         assert len(player_agents) == self.n_players
