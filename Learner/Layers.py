@@ -57,10 +57,9 @@ class PowerfulLayer(nn.Module):
         out = out1 @ out2
         del out1, out2
 
-        out = out.permute(0, 2, 3, 1) * self.adj_norm
-
         # Return Residual
-        return out + matrix
+        out = out.permute(0, 2, 3, 1) + matrix
+        return out * self.adj_norm
 
         # # Return Gated Residual
         # out = T.cat((out, matrix), dim=3)  # batch, N, N, out_feat
