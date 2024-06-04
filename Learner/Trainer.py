@@ -1,13 +1,14 @@
+import os
 from time import sleep
-from typing import Tuple
 
 import torch as T
 import torch.nn as nn
-import torch.nn.functional as F
 import torch.optim as optim
 
+from Learner.Loss import Loss
 from Learner.Nets import GameNet
 from Learner.PrioReplayBuffer import PrioReplayBuffer
+from Learner.Utils import TensorUtils
 
 
 class Trainer:
@@ -27,8 +28,16 @@ class Trainer:
         self.batch_range = T.arange(self.batch_size, dtype=T.long)
 
         self.tick_iter = 0
+        self.find_start_tick()
 
         self.known_allowed_states = None
+
+    def find_start_tick(self):
+        str_start = len("Q_Agent") + 1
+        str_end = len(".pth")
+        files = os.listdir('./PastTitans/')
+        checkpoints = [int(f[str_start:-str_end]) for f in files]
+        self.tick_iter = 1 + max(checkpoints)
 
     def tick(self):
         if self.buffer.mem_size < self.batch_size:
@@ -65,22 +74,24 @@ class Trainer:
         lstm_cell = self.buffer.data['lstm_cell'][None, inds, 0, :].to(self.q_net.on_device)
 
         lstm_target_state = self.buffer.data['lstm_state'][None, inds, -1, :].to(self.q_net.on_device)
-        lstm_cell_state = self.buffer.data['lstm_cell'][None, inds, -1, :].to(self.q_net.on_device)
+        lstm_target_cell = self.buffer.data['lstm_cell'][None, inds, -1, :].to(self.q_net.on_device)
 
         q, _, _ = self.q_net(state, seq_lens, lstm_state, lstm_cell)
         q = q[batch_range, :, :, :, player]
 
-        next_act, _ = self.get_batch_max(q[:, -1:])
-        q = self.gather_actions(q, action)
+        next_act, _ = TensorUtils.get_batch_max(q[:, -1:])
+        q = TensorUtils.gather_actions(q, action)
 
-        td_error = self.get_td_error(
+        td_error = Loss.get_td_error(
+            self.target_net,
             q,
             state,
             reward,
+            self.gamma,
             next_act,
             seq_lens,
             lstm_target_state,
-            lstm_cell_state,
+            lstm_target_cell,
             done,
             player
         )
@@ -108,70 +119,6 @@ class Trainer:
 
         return td_error.mean().item()
 
-    def get_td_error(
-            self,
-            q: T.Tensor,
-            state: T.Tensor,
-            reward: T.Tensor,
-            next_act: T.Tensor,
-            seq_lens: T.Tensor,
-            lstm_target_state: T.Tensor,
-            lstm_cell_state: T.Tensor,
-            done: T.Tensor,
-            player: T.Tensor
-    ):
-        # Get next Q from target net
-        with T.no_grad():
-            next_q, _, _ = self.target_net(
-                state[:, -1:, :, :],
-                T.ones_like(seq_lens),
-                lstm_target_state,
-                lstm_cell_state
-            )
-            next_q = next_q[self.batch_range[q.shape[0]], :, :, :, player]
-            next_q = self.gather_actions(next_q, next_act)
-
-        reward[~done, seq_lens[~done.cpu()] - 1] = next_q[~done, 0]
-        reward = self.propagate_rewards(self.gamma, reward)
-        target_q = reward[:, :-1]
-
-        for i in range(q.shape[0]):
-            if seq_lens[i] == q.shape[1]:
-                continue
-            q[i, seq_lens[i]:] = 0
-            target_q[i, seq_lens[i]:] = 0
-
-        q = q[:, :-1]
-
-        # Calculate loss
-        td_error = F.mse_loss(q, target_q, reduction="none")
-
-        return td_error
-    
-    @staticmethod
-    def propagate_rewards(gamma, rewards):
-        """
-        Propagates rewards backwards through a sequence.
-
-        Args:
-        - rewards (torch.Tensor): Tensor of shape [B, T] containing rewards,
-          where B is batch size and T is sequence length.
-        - gamma (float): Discount factor for future rewards.
-
-        Returns:
-        - torch.Tensor: Tensor of shape [B, T] with propagated rewards.
-        """
-        rewards = rewards.float()
-        reversed_rewards = T.flip(rewards, dims=[1])
-        updated_rewards = reversed_rewards.clone()
-
-        for t in range(1, rewards.size(1)):
-            updated_rewards[:, t] += gamma * updated_rewards[:, t - 1]
-
-        propagated_rewards = T.flip(updated_rewards, dims=[1])
-
-        return propagated_rewards
-
     def save(self, method):
         assert method in ['latest', 'checkpoint']
         if method == 'latest':
@@ -185,34 +132,11 @@ class Trainer:
         else:
             self.known_allowed_states = state_mask.clone().detach().any(0).squeeze() | self.known_allowed_states
 
-    @staticmethod
-    def get_batch_max(batched_tensor: T.Tensor) -> Tuple[T.Tensor, T.Tensor]:
-        b, s, n, _ = batched_tensor.shape
-        max_act = T.empty((b, s, 2), dtype=T.long)
-        max_q = T.empty((b, s)).to(batched_tensor.device)
-        for i in range(b):
-            for j in range(s):
-                b_inds = T.argwhere(batched_tensor[i, j] == batched_tensor[i, j].max())
-                if b_inds.numel() > 2:
-                    b_inds = b_inds[T.randint(0, b_inds.shape[0], (1,))]
-                max_act[i, j, :] = b_inds
-                max_q[i, j] = batched_tensor[i, j].max()
-        return max_act, max_q
-
-    @staticmethod
-    def gather_actions(values, indices):
-        return values[
-            T.arange(values.size(0)).unsqueeze(1),
-            T.arange(values.size(1)),
-            indices[:, :, 0],
-            indices[:, :, 1]
-        ]
-
     def get_rule_break_q(self, q: T.Tensor, state_mask: T.Tensor) -> T.Tensor:
         self.update_known_allowed(state_mask)
         rule_mask = (~state_mask.squeeze() & self.known_allowed_states)
 
-        _, max_q = self.get_batch_max(q)
+        _, max_q = TensorUtils.get_batch_max(q)
         rule_breaking_q = q - self.gamma * max_q[:, None, None]
         rule_breaking_q = rule_breaking_q[rule_mask]
         if rule_breaking_q.numel() == 0:

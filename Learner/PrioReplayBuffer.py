@@ -67,11 +67,12 @@ class PrioReplayBuffer:
         self._size = 0
 
     def add(self,
-            state: TensorDeque,
-            action: TensorDeque,
-            reward: TensorDeque,
-            lstm_state: TensorDeque,
-            lstm_cell: TensorDeque,
+            state: T.Tensor,
+            action: T.Tensor,
+            reward: T.Tensor,
+            td_error: T.Tensor,
+            lstm_state: T.Tensor,
+            lstm_cell: T.Tensor,
             done: bool,
             episode: int,
             player: int
@@ -79,21 +80,14 @@ class PrioReplayBuffer:
 
         if self.is_full:
             idx = self.min_prio_idx
+            if td_error.item() < self.data['prio'][idx]:
+                return
         else:
             idx = self._next_idx
             self._next_idx = (idx + 1) % self._capacity
 
-        state = state.to_tensor()
-        action = action.to_tensor()
-        reward = reward.to_tensor()
-        lstm_state = lstm_state.to_tensor()
-        lstm_cell = lstm_cell.to_tensor()
-
         state = state.squeeze()
-        action = action.long()
         reward = reward.squeeze()
-        lstm_state = lstm_state[:-1, 0, 0, :]
-        lstm_cell = lstm_cell[:-1, 0, 0, :]
 
         self.data['state'][idx, :len(state)] = state
         self.data['action'][idx, :len(action)] = action
@@ -104,7 +98,7 @@ class PrioReplayBuffer:
         self.data['done'][idx] = done
         self.data['episode'][idx] = episode
         self.data['player'][idx] = player
-        self.data['prio'][idx] = self._max_priority ** self._alpha
+        self.data['prio'][idx] = min(td_error.item(), self._max_priority) ** self._alpha
 
         self._size = min(self._capacity, self._size + 1)
 
@@ -122,45 +116,12 @@ class PrioReplayBuffer:
             'inds': sample_inds,
             'weights': weights
         }
-        # for k, v in self.data.items():
-        #     samples[k] = v[sample_inds]
 
         return samples
 
     def update_prio(self, ind: T.Tensor, prio: np.array):
         clipped_prio = prio.clip(max=self._max_priority)
         self.data['prio'][ind] = clipped_prio
-        self._sum_priority = self.data['prio'].sum()
-
-    # def update_reward(self, reward: float | None) -> None:
-    #     if reward is not None:
-    #         self.data['reward'][self._next_idx - 1] = reward
-    #     self.data['done'][self._next_idx - 1] = done
-
-    # def add_to_buffer(self, key, value) -> bool:
-    #     """returns True if buffer was flushed"""
-    #     if key in self._buffer:
-    #         raise KeyError("Tried to overwrite buffer value")
-    #
-    #     self._buffer[key] = value
-    #
-    #     if self._req_data_keys.issubset(self._buffer.keys()):
-    #         self.flush_buffer()
-    #         return True
-    #     return False
-    #
-    # def flush_buffer_state(self):
-    #     self.add(
-    #         self._buffer['state'],
-    #         self._buffer['state_mask'],
-    #         self._buffer['action'],
-    #         self._buffer['new_state'],
-    #         self._buffer['new_state_mask'],
-    #         self._buffer['reward'],
-    #         self._buffer['done'],
-    #         # self._player
-    #     )
-    #     self._buffer.clear()
 
     def save_test(self):
         if self._save_countdown <= 0:
@@ -199,10 +160,6 @@ class PrioReplayBuffer:
     @property
     def is_full(self):
         return self._capacity == self._size
-
-    @property
-    def priority_sum(self) -> float:
-        return self._sum_priority
 
     @property
     def save_interval(self):

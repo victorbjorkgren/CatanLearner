@@ -3,7 +3,7 @@ from torch_geometric.utils.convert import from_networkx
 import torch_geometric.data as pyg_data
 
 from HexGrid.HexGrid import make_hex_grid
-from Learner.Utils import pairwise_isin
+from Learner.Utils import TensorUtils
 
 from .constants import *
 
@@ -201,7 +201,7 @@ class Board:
         all_roads = self.state.edge_index[:, all_road_inds]
         connected_roads = T.isin(self.state.edge_index, player_road_nodes).any(0)
         connected_roads = self.state.edge_index[:, connected_roads]
-        already_built = pairwise_isin(connected_roads, all_roads)
+        already_built = TensorUtils.pairwise_isin(connected_roads, all_roads)
 
         return connected_roads[:, ~already_built]
 
@@ -221,7 +221,6 @@ class Board:
         if first_turn:
             has_connection = (self.state.x[u, player] > 0) | (self.state.x[v, player] > 0)
         else:
-            # TODO: Seems to let player build from other player's roads
             has_connection = edge_value_neighbor.nonzero().numel() > 0
 
         return is_free & has_connection

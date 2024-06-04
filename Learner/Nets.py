@@ -1,7 +1,6 @@
 import os
-import random
 from datetime import datetime
-from typing import Tuple, List, Optional
+from typing import Tuple
 
 import torch
 import torch as T
@@ -10,8 +9,8 @@ import torch_geometric as pyg
 from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 
 from Environment import Game
-from .Utils import sparse_face_matrix, preprocess_adj, sparse_misc_node
-from .Layers import MLP, PowerfulLayer, MultiHeadAttention
+from Learner.Utils import TensorUtils
+from Learner.Layers import MLP, PowerfulLayer, MultiHeadAttention
 
 
 class PlayerNet(nn.Module):
@@ -49,13 +48,6 @@ class PlayerNet(nn.Module):
         return output
 
 
-def nn_sum(tensor: T.Tensor, dims: List[int]) -> T.Tensor:
-    for dim in dims:
-        tensor = tensor.sum(dim, keepdim=True)
-    return tensor
-    # return tensor.permute(0, 3, 1, 2).sum(dim=-2, keepdim=True).sum(-1, keepdim=True).permute(0, 2, 3, 1)
-
-
 class GameNet(nn.Module):
     def __init__(self,
                  net_config,
@@ -84,8 +76,8 @@ class GameNet(nn.Module):
         self.n_embed = n_embed
         self.undirected_faces = undirected_faces
         self.sparse_edge = sparse_edge
-        self.sparse_face = sparse_face_matrix(sparse_face, to_undirected=self.undirected_faces)
-        self.sparse_pass_node = sparse_misc_node(sparse_edge.max(), self.sparse_face.max() + 1, to_undirected=True)
+        self.sparse_face = TensorUtils.sparse_face_matrix(sparse_face, to_undirected=self.undirected_faces)
+        self.sparse_pass_node = TensorUtils.sparse_misc_node(sparse_edge.max(), self.sparse_face.max() + 1, to_undirected=True)
         self.sparse_full = T.cat((self.sparse_edge, self.sparse_face, self.sparse_pass_node), dim=1)
 
         # TODO: Remove Magic Numbers
@@ -118,9 +110,9 @@ class GameNet(nn.Module):
         self.face_mask = self.face_mask.view((1, -1)).squeeze()
         self.full_mask = self.full_mask.view((1, -1)).squeeze()
 
-        self.face_adj_norm = preprocess_adj(self.face_adj, batch_size, add_self_loops=False)
-        self.edge_adj_norm = preprocess_adj(self.edge_adj, batch_size, add_self_loops=False)
-        self.full_adj_norm = preprocess_adj(self.full_adj, batch_size, add_self_loops=False)
+        self.face_adj_norm = TensorUtils.preprocess_adj(self.face_adj, batch_size, add_self_loops=False)
+        self.edge_adj_norm = TensorUtils.preprocess_adj(self.edge_adj, batch_size, add_self_loops=False)
+        self.full_adj_norm = TensorUtils.preprocess_adj(self.full_adj, batch_size, add_self_loops=False)
 
         self.node_embed = MLP(n_node_attr + n_players * n_player_attr + 2, n_embed, residual=False)
         self.edge_embed = MLP(n_edge_attr + n_players * n_player_attr + 2, n_embed, residual=False)
@@ -163,7 +155,7 @@ class GameNet(nn.Module):
         obs_matrix, hn, cn = self.temporal_layer(obs_matrix, seq_lengths, h_in, c_in)
         action_matrix, state_matrix = self.action_value_heads(obs_matrix)
 
-        mean_action = nn_sum(action_matrix, [2, 3]) / self.n_possible_actions
+        mean_action = TensorUtils.nn_sum(action_matrix, [2, 3]) / self.n_possible_actions
         q_matrix = action_matrix + (state_matrix - mean_action)
 
         # Mask invalid actions
