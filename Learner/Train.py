@@ -100,6 +100,14 @@ class Trainer():
         loss.backward()
         self.optimizer.step()
 
+        # Sometimes print weight info
+        if self.tick % 1000 == 0:
+            for name, module in self.q_net.named_modules():
+                if hasattr(module, 'weight') and module.weight is not None:
+                    weight_max = T.max(module.weight).item()
+                    grad_max = T.max(module.weight.grad).item()
+                    print(f"{name}: Max weight = {weight_max:.4e} - Max grad = {grad_max:.4e}")
+
         if self.tick % 100 == 0:
             self.target_net.clone_state(self.q_net)
 
