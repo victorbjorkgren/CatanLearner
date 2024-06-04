@@ -31,6 +31,8 @@ class Trainer():
         self.available_agents = None
         self.tick = 0
 
+        self.known_allowed_states = None
+
     def train(self) -> Tuple[float, float]:
         assert self.available_agents is not None, 'Trainer: No available agents'
 
@@ -52,9 +54,11 @@ class Trainer():
         # Make sure state pairs belong to same episode, otherwise drop inds
         episode = agent.data['episode'][inds]  # .to(self.q_net.on_device)
         episode_next = agent.data['episode'][next_inds]  # .to(self.q_net.on_device)
-        inds = inds[episode == episode_next]
-        next_inds = next_inds[episode == episode_next]
-        weights = weights[episode == episode_next]
+        reward = agent.data['reward'][inds]
+        done = agent.data['done'][inds].bool()
+        inds = inds[(episode == episode_next) | (reward != 0) | done]
+        next_inds = next_inds[(episode == episode_next) | (reward != 0) | done]
+        weights = weights[(episode == episode_next) | (reward != 0) | done]
         batch_range = self.batch_range[:inds.shape[0]]
 
         state = agent.data['state'][inds].to(self.q_net.on_device)
@@ -66,20 +70,13 @@ class Trainer():
         player = agent.data['player'][inds].to(self.q_net.on_device)
 
         # TODO: Check Norm of samples
-        q = self.q_net(state)
-        rule_breaking_q = q[batch_range, :, :, player][~state_mask.squeeze()]
-        q = q[batch_range, action[:, 0], action[:, 1], player]
+        q = self.q_net(state)[batch_range, :, :, player]
+        rule_breaking_q = self.get_rule_break_q(q.detach(), state_mask)
+        q = q[batch_range, action[:, 0], action[:, 1]]
 
         # Get next action
-        next_q = self.q_net(new_state)
-        next_q = next_q[batch_range, :, :, player]
-        next_act = T.empty((next_q.shape[0], 2), dtype=T.long)
-        for i in range(next_q.shape[0]):
-            b_inds = T.argwhere(next_q[0] == next_q[0].max())
-            if b_inds.numel() > 2:
-                b_inds = b_inds[T.randint(0, b_inds.shape[0], (1,))]
-            next_act[i, :] = b_inds
-
+        next_q = self.q_net(new_state)[batch_range, :, :, player]
+        next_act, _ = self.get_batch_max(next_q)
 
         # Get next Q from target net
         with T.no_grad():
@@ -89,13 +86,15 @@ class Trainer():
 
         target_q = reward + (self.gamma * next_q)
 
-        # Calculate and remember loss
+        # Calculate loss
         td_error = F.mse_loss(q, target_q, reduction="none")
-        td_error = td_error.clamp_max(1.)
+        td_error = td_error.clamp_max(2.)
+
         rule_break_loss = T.mean(rule_breaking_q ** 2)
         rule_break_loss = rule_break_loss.clamp_max(1.)
+
         agent.update_prio(inds, td_error.detach().cpu().numpy())
-        loss = (td_error * weights).mean() + rule_break_loss
+        loss = (td_error * weights).mean() + .001 * rule_break_loss
 
         self.optimizer.zero_grad()
         loss.backward()
@@ -122,3 +121,33 @@ class Trainer():
     def save(self):
         super().save()
         self.q_net.save()
+
+    def update_known_allowed(self, state_mask):
+        if self.known_allowed_states is None:
+            self.known_allowed_states = state_mask.clone().detach().any(0).squeeze()
+        else:
+            self.known_allowed_states = state_mask.clone().detach().any(0).squeeze() | self.known_allowed_states
+
+    @staticmethod
+    def get_batch_max(batched_tensor: T.Tensor) -> Tuple[T.Tensor, T.Tensor]:
+        max_act = T.empty((batched_tensor.shape[0], 2), dtype=T.long)
+        max_q = T.empty((batched_tensor.shape[0],)).to(batched_tensor.device)
+        for i in range(batched_tensor.shape[0]):
+            b_inds = T.argwhere(batched_tensor[i] == batched_tensor[i].max())
+            if b_inds.numel() > 2:
+                b_inds = b_inds[T.randint(0, b_inds.shape[0], (1,))]
+            max_act[i, :] = b_inds
+            max_q[i] = batched_tensor[i].max()
+        return max_act, max_q
+
+    def get_rule_break_q(self, q: T.Tensor, state_mask: T.Tensor) -> T.Tensor:
+        self.update_known_allowed(state_mask)
+        rule_mask = (~state_mask.squeeze() & self.known_allowed_states)
+
+        _, max_q = self.get_batch_max(q)
+        rule_breaking_q = q - self.gamma * max_q[:, None, None]
+        rule_breaking_q = rule_breaking_q[rule_mask]
+        if rule_breaking_q.numel() == 0:
+            rule_breaking_q = T.zeros((1,))
+
+        return rule_breaking_q

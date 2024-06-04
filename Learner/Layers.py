@@ -91,7 +91,7 @@ class PowerfulLayer(nn.Module):
 
         # Reshape and Norm
         # out = (adj_norm @ out).permute(0, 2, 3, 1)
-        return out
+        return out * self.adj_norm
 
         # # Return Gated Residual
         # out = T.cat((out, matrix), dim=3)  # batch, N, N, out_feat
