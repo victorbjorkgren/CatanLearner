@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Tuple, List
+from typing import Tuple, List, Optional
 
 import torch as T
 
@@ -34,9 +34,11 @@ class TensorDeque:
     def __getitem__(self, idx):
         if isinstance(idx, int):
             if self.is_full:
-                assert ((idx < self._capacity) & (idx >= -self._capacity)), f"index out of bounds, expected [{-self._capacity}, {self._capacity - 1}]"
+                assert ((idx < self._capacity) & (
+                            idx >= -self._capacity)), f"index out of bounds, expected [{-self._capacity}, {self._capacity - 1}]"
             else:
-                assert (idx < self._index) & (idx >= -self._index), f"index out of bounds, expected [{-self._index}, {self._index - 1}]"
+                assert (idx < self._index) & (
+                            idx >= -self._index), f"index out of bounds, expected [{-self._index}, {self._index - 1}]"
             # Adjust idx to get the element in the circular buffer correctly
             adjusted_idx = (self._index + idx) % self._capacity
             return self._buffer[adjusted_idx]
@@ -81,7 +83,8 @@ class TensorDeque:
             self.dtype = element.dtype
 
         if element is not None:
-            assert self._buffer.shape[1:] == element.shape, f"Element shape mismatch, expected {self._buffer.shape[1:]}, got {element.shape}"
+            assert self._buffer.shape[
+                   1:] == element.shape, f"Element shape mismatch, expected {self._buffer.shape[1:]}, got {element.shape}"
             self._buffer[self._index] = element
 
         self._increment()
@@ -175,13 +178,25 @@ class TensorUtils:
         return matches
 
     @staticmethod
-    def gather_actions(values, indices):
-        return values[
-            T.arange(values.size(0)).unsqueeze(1),
-            T.arange(values.size(1)),
-            indices[:, :, 0],
-            indices[:, :, 1]
-        ]
+    def gather_actions(q_values: T.Tensor, trade_q_values: T.Tensor, indices: T.Tensor, was_trade: Optional[T.Tensor]) -> T.Tensor:
+        if was_trade is None:
+            was_trade = T.zeros(indices.shape[:2], dtype=T.bool)
+
+        q_out = T.empty(indices.shape[:2]).to(q_values.device)
+        was_trade = was_trade.cpu()
+        was_trade_range = T.arange(was_trade.sum())
+        was_trade_zero = T.zeros(was_trade.sum()).long()
+        was_trade_one = T.ones(was_trade.sum()).long()
+        give_q = trade_q_values[was_trade][was_trade_range, was_trade_zero, indices[was_trade][:, 0]]
+        get_q = trade_q_values[was_trade][was_trade_range, was_trade_one, indices[was_trade][:, 1]]
+
+        not_was_trade_range = T.arange((~was_trade).sum())
+        build_q = q_values[~was_trade][not_was_trade_range, indices[~was_trade][:, 0], indices[~was_trade][:, 1]]
+        if was_trade.sum() > 0:
+            q_out[was_trade] = give_q + get_q
+        if (~was_trade).sum() > 0:
+            q_out[~was_trade] = build_q
+        return q_out
 
     @staticmethod
     def propagate_rewards(gamma, rewards):

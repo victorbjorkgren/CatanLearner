@@ -6,11 +6,10 @@ from typing import Tuple, Optional
 import torch as T
 
 from Environment import Game
-from Learner.Loss import Loss
 from Learner.Nets import GameNet
 from Learner.PrioReplayBuffer import PrioReplayBuffer
 from Learner.Utils import TensorDeque, Transition, TensorUtils
-from Learner.constants import GAMMA, USE_ACTOR_PRIO
+from Learner.constants import USE_ACTOR_PRIO
 
 
 class Agent:
@@ -34,6 +33,7 @@ class Agent:
         self.q_seq = TensorDeque(max_len=max_seq_length)
         self.action_seq = TensorDeque(max_len=max_seq_length)
         self.reward_seq = TensorDeque(max_len=max_seq_length, queue_like=T.zeros((1,), dtype=T.float))
+        self.was_trade_seq = TensorDeque(max_len=max_seq_length)
 
         self.lstm_state_seq = TensorDeque(max_len=max_seq_length, queue_like=T.zeros((1, 1, 32), dtype=T.float))
         self.lstm_cell_seq = TensorDeque(max_len=max_seq_length, queue_like=T.zeros((1, 1, 32), dtype=T.float))
@@ -55,17 +55,17 @@ class Agent:
     def clear_cache(self):
         pass
 
-    def sample_random(self, i_am_player):
+    def sample_random(self, i_am_player: int) -> Tuple[T.Tensor, T.Tensor, bool]:
         if self.game.first_turn:
             if self.game.first_turn_village_switch:
                 action_type = 2
             else:
                 action_type = 1
         else:
-            action_type = randint(0, 2)
+            action_type = randint(0, 3)
 
         if action_type == 0:
-            return T.tensor((0, 0)), T.tensor((73, 73))
+            return T.tensor((0, 0)), T.tensor((73, 73)), False
 
         elif action_type == 1:
             road_mask = self.game.board.sparse_road_mask(
@@ -75,9 +75,9 @@ class Agent:
             )
             if road_mask.numel() > 0:
                 index, raw_index = self._sample_road(road_mask)
-                return T.tensor((1, index)), raw_index
+                return T.tensor((1, index)), raw_index, False
             else:
-                return T.tensor((0, 0)), T.tensor((73, 73))
+                return T.tensor((0, 0)), T.tensor((73, 73)), False
 
         elif action_type == 2:
             village_mask = self.game.board.sparse_village_mask(
@@ -87,9 +87,20 @@ class Agent:
             )
             if village_mask.numel() > 0:
                 index = self._sample_village(village_mask)
-                return T.tensor((action_type, index)), T.tensor((index, index))
+                return T.tensor((action_type, index)), T.tensor((index, index)), False
             else:
-                return T.tensor((0, 0)), T.tensor((73, 73))
+                return T.tensor((0, 0)), T.tensor((73, 73)), False
+
+        elif action_type == 3:
+            tradeable = self.game.can_trade(i_am_player, 4)
+            desired = randint(0, 4)
+            if tradeable.numel() == 0:
+                return T.tensor((0, 0)), T.tensor((73, 73)), False
+            elif tradeable.numel() == 1:
+                return T.Tensor((3, tradeable[0], desired)), T.Tensor((tradeable[0], desired)), True
+            else:
+                given = randint(0, tradeable.shape[0] - 1)
+                return T.Tensor((3, tradeable[given], desired)), T.Tensor((tradeable[given], desired)), True
         else:
             raise RuntimeError(f"Illegal action type chosen {action_type}")
 
@@ -130,6 +141,7 @@ class Agent:
         self.state_seq.clear()
         self.action_seq.clear()
         self.reward_seq.clear()
+        self.was_trade_seq.clear()
         self.q_seq.clear()
 
         self.lstm_state_seq.clear()
@@ -143,6 +155,7 @@ class Agent:
             state = self.state_seq.to_tensor()
             action = self.action_seq.to_tensor()
             reward = self.reward_seq.to_tensor()
+            was_trade = self.was_trade_seq.to_tensor()
             lstm_state = self.lstm_state_seq.to_tensor()
             lstm_cell = self.lstm_cell_seq.to_tensor()
             q = self.q_seq.to_tensor()
@@ -155,31 +168,33 @@ class Agent:
             lstm_cell = lstm_cell[:-1, 0, 0, :]
 
             if USE_ACTOR_PRIO:
-                lstm_target_state = lstm_state[None, None, -1, :]
-                lstm_target_cell = lstm_cell[None, None, -1, :]
-
-                seq_len = T.tensor([state.shape[1]], dtype=T.long)
-                titan_q_net = self.tracker_instance.get_titan().q_net
-
-                td_error = Loss.get_td_error(
-                    titan_q_net,
-                    q,
-                    state,
-                    reward,
-                    GAMMA,
-                    None,
-                    seq_len,
-                    lstm_target_state,
-                    lstm_target_cell,
-                    T.tensor([done], dtype=T.bool),
-                    T.tensor([i_am_player], dtype=T.long)
-                )
+                raise NotImplementedError("Using prio actor is stale. Trade has not been implemented here")
+                # lstm_target_state = lstm_state[None, None, -1, :]
+                # lstm_target_cell = lstm_cell[None, None, -1, :]
+                #
+                # seq_len = T.tensor([state.shape[1]], dtype=T.long)
+                # titan_q_net = self.tracker_instance.get_titan().q_net
+                #
+                # td_error = Loss.get_td_error(
+                #     titan_q_net,
+                #     q,
+                #     state,
+                #     reward,
+                #     GAMMA,
+                #     None,
+                #     seq_len,
+                #     lstm_target_state,
+                #     lstm_target_cell,
+                #     T.tensor([done], dtype=T.bool),
+                #     T.tensor([i_am_player], dtype=T.long)
+                # )
             else:
                 td_error = T.tensor([1.], dtype=T.float)
 
             self.buffer.add(
                 state,
                 action,
+                was_trade,
                 reward,
                 td_error.mean(),
                 lstm_state,
@@ -207,7 +222,8 @@ class Agent:
             reward: Optional[T.Tensor] = None,
             q: Optional[T.Tensor] = None,
             lstm_state: Optional[T.Tensor] = None,
-            lstm_cell: Optional[T.Tensor] = None
+            lstm_cell: Optional[T.Tensor] = None,
+            was_trade: Optional[T.Tensor] = None
     ) -> None:
         if state is not None:
             self.state_seq.append(state)
@@ -221,6 +237,8 @@ class Agent:
             self.lstm_state_seq.append(lstm_state)
         if lstm_cell is not None:
             self.lstm_cell_seq.append(lstm_cell)
+        if was_trade is not None:
+            self.was_trade_seq.append(was_trade)
 
     @property
     def avg_reward(self) -> float:
@@ -350,6 +368,7 @@ class QAgent(Agent):
 
     def sample_action(self, state: T.Tensor, i_am_player: int) -> Tuple[T.Tensor, T.Tensor]:
         build_q: T.Tensor
+        q_trade_mat: T.Tensor
 
         state_key = TensorUtils.get_cache_key(state)
 
@@ -363,28 +382,44 @@ class QAgent(Agent):
         c0 = self.lstm_cell_seq[-1]
 
         with T.no_grad():
-            q, hn, cn = self.q_net(state.unsqueeze(1), T.Tensor([1]), h0, c0)
+            q_mat, q_trade_mat, hn, cn = self.q_net(state.unsqueeze(1), T.Tensor([1]), h0, c0)
             self._to_buffer(lstm_state=hn)
             self._to_buffer(lstm_cell=cn)
 
         if random() > self.epsilon:
-            action, raw_action = self.sample_random(i_am_player)
-            self._to_buffer(action=raw_action)
-            self._to_buffer(q=q[0, 0, raw_action[0], raw_action[1], i_am_player])
+            action, raw_action, was_trade = self.sample_random(i_am_player)
+            if was_trade:
+                self._to_buffer(action=T.Tensor((action[1], action[2])))
+            else:
+                self._to_buffer(action=raw_action)
+                self._to_buffer(q=q_mat[0, 0, raw_action[0], raw_action[1], i_am_player])
+            self._to_buffer(was_trade=T.tensor([was_trade], dtype=T.bool))
             return action, raw_action
 
-        pass_q = q[0, 0, -1, -1, i_am_player]
-        q = q[0, 0, :54, :54, i_am_player]
-        q = self._pull_cache(state_key, q)
+        pass_q = q_mat[0, 0, -1, -1, i_am_player]
+        q_trade_mat = q_trade_mat[0, 0, :, :, i_am_player]
+        q_mat = q_mat[0, 0, :54, :54, i_am_player]
+        q_mat, q_trade_mat = self._pull_cache(state_key, q_mat, q_trade_mat)
 
-        build_q = q.max()
+        build_q = q_mat.max()
+        trade_q = q_trade_mat[0].max() + q_trade_mat[1].max()
 
-        if (pass_q > build_q) & (not self.game.first_turn):
+        if (pass_q > build_q) & (pass_q > trade_q) & (not self.game.first_turn):
             self._to_buffer(q=pass_q)
             self._to_buffer(action=T.tensor((73, 73)))
+            self._to_buffer(was_trade=T.tensor([False], dtype=T.bool))
             return T.tensor((0, 0)), T.tensor((73, 73))
+        elif (trade_q > build_q) & (not self.game.first_turn):
+            give = T.argwhere(q_trade_mat[0] == q_trade_mat[0].max()).cpu()
+            get = T.argwhere(q_trade_mat[1] == q_trade_mat[1].max()).cpu()
+            trade_action = T.tensor((give, get), dtype=T.float)
+            self._to_buffer(q=trade_q)
+            self._to_buffer(action=trade_action)
+            self._to_buffer(was_trade=T.tensor([True], dtype=T.bool))
+            self._push_cache(state_key, trade_action, True)
+            return T.Tensor((3, give, get)), trade_action
         else:
-            build_action = T.argwhere(q == build_q).cpu()
+            build_action = T.argwhere(q_mat == build_q).cpu()
             if build_action.shape[0] > 1:
                 build_action = build_action[T.randint(0, build_action.shape[0], (1,))].squeeze()
             elif build_action.shape[0] == 1:
@@ -400,7 +435,8 @@ class QAgent(Agent):
                 index = T.argwhere(bool_hit).item()
                 self._to_buffer(q=build_q)
                 self._to_buffer(action=build_action)
-                self._push_cache(state_key, build_action)
+                self._to_buffer(was_trade=T.tensor([False], dtype=T.bool))
+                self._push_cache(state_key, build_action, False)
                 return T.tensor((1, index)), build_action
 
             elif build_action[0] == build_action[1]:
@@ -408,7 +444,8 @@ class QAgent(Agent):
                     raise RuntimeError("Non-node index returned for building settlement")
                 self._to_buffer(q=build_q)
                 self._to_buffer(action=build_action)
-                self._push_cache(state_key, build_action)
+                self._to_buffer(was_trade=T.tensor([False], dtype=T.bool))
+                self._push_cache(state_key, build_action, False)
                 return T.tensor((2, build_action[0])), build_action
             else:
                 raise RuntimeError("Invalid Build Action in QAgent")
@@ -416,15 +453,19 @@ class QAgent(Agent):
     def clear_cache(self) -> None:
         self.episode_state_action_cache = {}
 
-    def _push_cache(self, state_key, build_action):
+    def _push_cache(self, state_key, action, was_trade):
         if state_key not in self.episode_state_action_cache:
-            self.episode_state_action_cache[state_key] = [build_action]
+            self.episode_state_action_cache[state_key] = [(was_trade, action)]
         else:
-            self.episode_state_action_cache[state_key].append(build_action)
+            self.episode_state_action_cache[state_key].append((was_trade, action))
 
-    def _pull_cache(self, state_key: Tuple, q: T.Tensor) -> T.Tensor:
+    def _pull_cache(self, state_key: Tuple, q: T.Tensor, trade_q: T.Tensor) -> T.Tensor:
         if state_key in self.episode_state_action_cache:
             cache_acts = self.episode_state_action_cache[state_key]
-            for act in cache_acts:
-                q[act[0], act[1]] = -T.inf
-        return q
+            for was_trade, act in cache_acts:
+                if was_trade:
+                    trade_q[0, act[0].long()] = -T.inf
+                    trade_q[1, act[1].long()] = -T.inf
+                else:
+                    q[act[0], act[1]] = -T.inf
+        return q, trade_q

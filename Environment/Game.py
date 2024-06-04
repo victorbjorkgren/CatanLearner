@@ -56,7 +56,7 @@ class Game:
         assert len(player_agents) == self.n_players
         self.player_agents = player_agents
 
-    def step(self, action: tuple[int, int], render: bool = False) -> tuple[float, bool, bool]:
+    def step(self, action: T.Tensor, render: bool = False) -> tuple[float, bool, bool]:
         """Take one action step in the game. Returns reward, done, and the actual action."""
         succeeded = True
         reward = 0.
@@ -77,13 +77,15 @@ class Game:
             else:
                 reward += 1
 
-        if (action[0] == 0) | (not succeeded):
+        # 4:1 trade
+        elif action[0] == 3:
+            succeeded = self.players[self.current_player].trade(action[1], action[2])
+
+        if action[0] == 0:
             self.idle_turns += 1
             self.current_player = (self.current_player + 1) % self.n_players
             self.turn += 1 / self.n_players
             self.resource_step()
-            if render:
-                self.render()
         else:
             self.idle_turns = 0
 
@@ -95,6 +97,15 @@ class Game:
             if winner:
                 self.player_agents[self.current_player].register_victory()
             return reward, True, succeeded
+
+    def can_trade(self, player: int, rate: int) -> T.Tensor:
+        """
+        Returns the inds that the player can trade at the asked rate
+        :param player: index for the player to do the trade
+        :param rate: rate for the trade
+        :return: Tensor of tradeable inds
+        """
+        return T.argwhere(self.players[player].hand >= rate)
 
     def first_turn_step(self, action) -> Tuple[bool, float]:
         reward = 0.
@@ -132,35 +143,6 @@ class Game:
             return True, reward
         else:
             return False, reward
-
-    # def take_first_turn(self):
-    #     for player in range(self.n_players):
-    #         self.build_free_village(player)
-    #         self.build_free_road(player)
-    #     for player in range(self.n_players):
-    #         self.build_free_village(player)
-    #         self.build_free_road(player)
-    #
-    #     # Give resources to all villages
-    #     face_hits = T.nonzero(self.board.state.face_attr)
-    #     for hit in face_hits:
-    #         self.give_resource(hit)
-
-    # def build_free_village(self, player):
-    #     village_built = False
-    #     while not village_built:
-    #         chosen_building = self.players[player].agent._sample_village(
-    #             self,
-    #             self.board.get_village_mask(player, self.players[player].hand, True),
-    #             player)
-    #         village_built = self.build_village(chosen_building, player, first_turn=True)
-    #
-    # def build_free_road(self, player):
-    #     road_built = False
-    #     while not road_built:
-    #         chosen_road = self.players[player].agent._sample_road(
-    #             self, self.board.get_road_mask(player, self.players[player].hand, True), player)
-    #         road_built = self.build_road(chosen_road, player, first_turn=True)
 
     def game_on(self):
         for player in self.players:
@@ -205,20 +187,12 @@ class Game:
             for i, gain in enumerate(player_gains):
                 self.players[i].add(resource.item(), gain.item())
 
-    def take_action(self, act_type, player, index):
-        # act_types
-        # 0 = pass
-        # 1 = road
-        # 2 = village
-        # TODO: trade, draw card
-        if act_type == 0:
-            return True
-        if act_type == 1:
-            self.build_road(index, player)
-            return False
-        if act_type == 2:
-            self.build_village(index, player)
-            return False
+    @staticmethod
+    def maritime_trade(player: Player, give: T.Tensor, get: T.Tensor, rate):
+        assert give.sum() == rate
+
+        player.give(give)
+        player.get(get)
 
     def build_road(self, index, player, first_turn=False):
         # [Bricks, Grains, Ores, Lumbers, Wools]

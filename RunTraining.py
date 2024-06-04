@@ -50,6 +50,8 @@ trainer = Trainer(
     buffer=buffer,
     batch_size=BATCH_SIZE,
     gamma=GAMMA,
+    learning_rate=LEARNING_RATE,
+    reward_scale=REWARD_SCALE
 )
 agent_list = [
     QAgent(

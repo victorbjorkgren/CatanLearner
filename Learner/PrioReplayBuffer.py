@@ -1,10 +1,8 @@
 import os
+import pickle
 
 import numpy as np
 import torch as T
-import pickle
-
-from Learner.Utils import TensorDeque
 
 
 def assert_capacity(n):
@@ -49,6 +47,7 @@ class PrioReplayBuffer:
             'state': T.zeros((capacity, max_seq_len, 74, 74, 16), dtype=T.float),
             'seq_len': T.zeros((capacity,), dtype=T.long),
             'action': T.zeros((capacity, max_seq_len, 2), dtype=T.long),
+            'was_trade': T.zeros((capacity, max_seq_len), dtype=T.bool),
             'reward': T.zeros((capacity, max_seq_len), dtype=T.float),
             'lstm_state': T.zeros((capacity, max_seq_len, 32), dtype=T.float),
             'lstm_cell': T.zeros((capacity, max_seq_len, 32), dtype=T.float),
@@ -68,6 +67,7 @@ class PrioReplayBuffer:
     def add(self,
             state: T.Tensor,
             action: T.Tensor,
+            was_trade: T.Tensor,
             reward: T.Tensor,
             td_error: T.Tensor,
             lstm_state: T.Tensor,
@@ -87,9 +87,11 @@ class PrioReplayBuffer:
 
         state = state.squeeze()
         reward = reward.squeeze()
+        was_trade = was_trade.squeeze()
 
         self.data['state'][idx, :len(state)] = state
         self.data['action'][idx, :len(action)] = action
+        self.data['was_trade'][idx, :len(was_trade)] = was_trade
         self.data['reward'][idx, :len(reward)] = reward
         self.data['lstm_state'][idx, :len(lstm_state)] = lstm_state
         self.data['lstm_cell'][idx, :len(lstm_cell)] = lstm_cell

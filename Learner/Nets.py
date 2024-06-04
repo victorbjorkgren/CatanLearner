@@ -9,6 +9,7 @@ import torch_geometric as pyg
 from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 
 from Environment import Game
+from Environment.constants import N_RESOURCES
 from Learner.Utils import TensorUtils
 from Learner.Layers import MLP, PowerfulLayer, MultiHeadAttention
 
@@ -77,7 +78,11 @@ class GameNet(nn.Module):
         self.undirected_faces = undirected_faces
         self.sparse_edge = sparse_edge
         self.sparse_face = TensorUtils.sparse_face_matrix(sparse_face, to_undirected=self.undirected_faces)
-        self.sparse_pass_node = TensorUtils.sparse_misc_node(sparse_edge.max(), self.sparse_face.max() + 1, to_undirected=True)
+        self.sparse_pass_node = TensorUtils.sparse_misc_node(
+            sparse_edge.max(),
+            self.sparse_face.max() + 1,
+            to_undirected=True
+        )
         self.sparse_full = T.cat((self.sparse_edge, self.sparse_face, self.sparse_pass_node), dim=1)
 
         # TODO: Remove Magic Numbers
@@ -121,6 +126,11 @@ class GameNet(nn.Module):
         self.action_value = MLP(n_embed, n_output, final=True)
         self.state_value = MLP(n_embed, n_output, final=True)
 
+        self.action_trade_give = MLP(n_embed, N_RESOURCES * n_players, final=True)
+        self.action_trade_get = MLP(n_embed, N_RESOURCES * n_players, final=True)
+        self.state_trade_give = MLP(n_embed, N_RESOURCES * n_players, final=True)
+        self.state_trade_get = MLP(n_embed, N_RESOURCES * n_players, final=True)
+
         self.lstm = nn.LSTM(n_embed, n_embed, batch_first=True)
 
         self.power_layers = nn.Sequential(*[
@@ -142,9 +152,10 @@ class GameNet(nn.Module):
                 seq_lengths: T.Tensor,
                 h_in: T.Tensor,
                 c_in: T.Tensor
-                ) -> Tuple[T.Tensor, T.Tensor, T.Tensor]:
+                ) -> Tuple[T.Tensor, T.Tensor, T.Tensor, T.Tensor]:
 
         assert len(observation.shape) == 5, "QNet wants [B, T, N, N, F]"
+        b, t, n, _, f = observation.shape
 
         obs_matrix = observation.to(self.on_device)
         h_in = h_in.to(self.on_device)
@@ -155,6 +166,15 @@ class GameNet(nn.Module):
         obs_matrix, hn, cn = self.temporal_layer(obs_matrix, seq_lengths, h_in, c_in)
         action_matrix, state_matrix = self.action_value_heads(obs_matrix)
 
+        game_state = obs_matrix[:, :, -1, -1, :]
+        action_trade_get = self.action_trade_get(game_state).view((b, t, 5, 2))
+        action_trade_give = self.action_trade_give(game_state).view((b, t, 5, 2))
+        state_trade_get = self.state_trade_get(game_state).view((b, t, 5, 2))
+        state_trade_give = self.state_trade_give(game_state).view((b, t, 5, 2))
+
+        action_trade = T.stack((action_trade_give, action_trade_get), dim=2)
+        state_trade = T.stack((state_trade_give, state_trade_get), dim=2)
+
         mean_action = TensorUtils.nn_sum(action_matrix, [2, 3]) / self.n_possible_actions
         q_matrix = action_matrix + (state_matrix - mean_action)
 
@@ -162,7 +182,10 @@ class GameNet(nn.Module):
         b, s, n, _, f = q_matrix.shape
         neg_mask = ~self.action_mask[None, :, :, :, None].repeat(b, s, 1, 1, f)
         q_matrix[neg_mask] = -T.inf
-        return q_matrix, hn, cn
+
+        mean_trade = TensorUtils.nn_sum(action_trade, [2, 3]) / N_RESOURCES
+        q_trade = action_trade + (state_trade - mean_trade)
+        return q_matrix, q_trade, hn, cn
 
     def temporal_layer(
             self,
@@ -221,7 +244,7 @@ class GameNet(nn.Module):
         return action_matrix, state_matrix
 
     def clone_state(self, other):
-        self.load_state_dict(other.state_dict())
+        self.load_state_dict(other.state_dict(), strict=False)
 
     def save(self, suffix):
         if suffix == 'latest':
@@ -238,9 +261,9 @@ class GameNet(nn.Module):
 
     def load(self, file: str | int):
         if file == 'latest':
-            self.load_state_dict(torch.load(f'./Q_Agent_Titan.pth'))
+            self.load_state_dict(torch.load(f'./Q_Agent_Titan.pth'), strict=False)
         else:
-            self.load_state_dict(torch.load(f'./PastTitans/{file}'))
+            self.load_state_dict(torch.load(f'./PastTitans/{file}'), strict=False)
 
     def get_dense(self, game: Game) -> Tuple[T.Tensor, int]:
         node_x, edge_x, face_x = self.extract_attr(game)
