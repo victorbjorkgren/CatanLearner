@@ -1,4 +1,5 @@
 import networkx as nx
+import matplotlib.pyplot as plt
 
 def node_dist(x, y, cx, cy):
     """Distance of each node from the center of the innermost layer"""
@@ -28,16 +29,16 @@ def remove_unwanted_nodes(G, m):
 
 def make_hex_grid(m):
     # change m here. 1 = 1 layer, single hexagon.
-    G = nx.hexagonal_lattice_graph(2 * m - 1, 2 * m - 1, periodic=False,
-                                   # with_positions=True,
+    g = nx.hexagonal_lattice_graph(2 * m - 1, 2 * m - 1, periodic=False,
+                                   with_positions=True,
                                    create_using=None)
-    # pos = nx.get_node_attributes(G, 'pos')
-    G = remove_unwanted_nodes(G, m)
+    g = remove_unwanted_nodes(g, m)
+    return g
 
+def plot_grid(G):
     # render the result
-    # plt.figure(figsize=(9, 9))
-    # nx.draw(G, pos=pos, with_labels=True)
-    # plt.axis('scaled')
-    # plt.show()
-
-    return G
+    pos = nx.get_node_attributes(G, 'pos')
+    plt.figure(figsize=(9, 9))
+    nx.draw(G, pos=pos)
+    plt.axis('scaled')
+    plt.show()
