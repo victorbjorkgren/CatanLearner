@@ -57,9 +57,6 @@ class Game:
         assert len(player_agents) == self.n_players
         self.player_agents = player_agents
 
-    def start(self, render=False):
-        return self.game_loop(render)
-
     def step(self, action: tuple[int, int], render: bool = False) -> tuple[T.Tensor, bool, bool]:
         """Take one action step in the game. Returns reward, done, and the actual action."""
         succeeded = True
@@ -142,40 +139,6 @@ class Game:
             chosen_road = self.players[player].agent.sample_road(
                 self, self.board.get_road_mask(player, self.players[player].hand, True), player)
             road_built = self.build_road(chosen_road, player, first_turn=True)
-
-    def game_loop(self, render=False):
-        current_player = 0
-        self.take_first_turn()
-        while self.game_on():
-            # Basic Game Loop
-            self.resource_step()
-            self.take_turn()
-
-            # Update trackers
-            self.current_player = (self.current_player + 1) % self.n_players
-            self.turn += 1 / self.n_players
-
-            # Render
-            if render:
-                self.render()
-
-        points = T.tensor([e.points for e in self.players])
-        winner = points.max() == points
-        if winner.sum() > 1:
-            rewards = T.zeros_like(winner, dtype=T.float)
-        else:
-            rewards = winner.float() * 2 - 1
-        return rewards
-
-    def take_turn(self):
-        turn_completed = False
-        while not turn_completed:
-            action_type, action_index = self.players[self.current_player].sample_action(
-                self,
-                i_am_player=self.current_player
-            )
-
-            turn_completed = self.take_action(action_type, self.current_player, action_index)
 
     def game_on(self):
         for player in self.players:
