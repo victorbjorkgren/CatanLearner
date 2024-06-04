@@ -233,8 +233,8 @@ class Game:
             if size == 1:
                 # [Bricks, Grains, Ores, Lumbers, Wools]
                 if (
-                        (self.players[player].hand[1] > 2)
-                        & (self.players[player].hand[2] > 3)
+                        (self.players[player].hand[1] >= 2)
+                        & (self.players[player].hand[2] >= 3)
                 ):
                     self.players[player].sub(1, 2)
                     self.players[player].sub(2, 3)
