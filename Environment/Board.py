@@ -3,7 +3,7 @@ from torch_geometric.utils.convert import from_networkx
 import torch_geometric.data as pyg_data
 
 from HexGrid.HexGrid import make_hex_grid
-from Learner.Utils import TensorUtils
+from Learner.Utility.Utils import TensorUtils
 
 from .constants import *
 

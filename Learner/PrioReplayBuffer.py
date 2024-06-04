@@ -2,12 +2,15 @@ import os
 import pickle
 import threading
 from abc import abstractmethod
-from collections import defaultdict
+from collections import defaultdict, deque
 from queue import Queue
 from time import sleep
+from typing import Deque
 
 import numpy as np
 import torch as T
+
+from Learner.Utility.Utils import Holders
 
 
 def assert_capacity(n):
@@ -70,7 +73,7 @@ class PrioReplayBuffer:
 
     @property
     def is_full(self):
-        return self._capacity == self._size
+        return self._capacity <= self.mem_size
 
     @property
     def save_interval(self):
@@ -130,11 +133,11 @@ class PrioReplayBuffer:
             return False
 
     def _sample_indices(self, n: int) -> tuple[np.ndarray, np.ndarray]:
-        prob = self.prios[:self._size] / max(1, self.prios[:self._size].sum())
+        prob = self.prios[:self.mem_size] / max(1, self.prios[:self.mem_size].sum())
         try:
-            sample_inds = np.random.choice(self._size, n, p=prob, replace=False)
+            sample_inds = np.random.choice(self.mem_size, n, p=prob, replace=False)
         except ValueError:
-            sample_inds = np.random.choice(self._size, n, replace=False)
+            sample_inds = np.random.choice(self.mem_size, n, replace=False)
         return sample_inds, prob[sample_inds]
 
 
@@ -144,77 +147,86 @@ class InMemBuffer(PrioReplayBuffer):
                  max_seq_len: int,
                  alpha: float,
                  beta: float,
-                 save_interval: int = 10_000
+                 # save_interval: int = 10_000
                  ) -> None:
-        super(InMemBuffer, self).__init__(capacity, max_seq_len, alpha, beta)
+        super().__init__(capacity, max_seq_len, alpha, beta)
 
-        # TODO: Fix Magic Numbers
-        self.data = {}
-        self.data['state'] = T.zeros((capacity, max_seq_len, 74, 74, 16), dtype=T.float)
-        self.data['seq_len'] = T.zeros((capacity,), dtype=T.long)
-        self.data['action'] = T.zeros((capacity, max_seq_len, 2), dtype=T.long)
-        self.data['was_trade'] = T.zeros((capacity, max_seq_len), dtype=T.bool)
-        self.data['reward'] = T.zeros((capacity, max_seq_len), dtype=T.float)
-        self.data['lstm_state'] = T.zeros((capacity, max_seq_len, 32), dtype=T.float)
-        self.data['lstm_cell'] = T.zeros((capacity, max_seq_len, 32), dtype=T.float)
-        self.data['done'] = T.zeros((capacity,), dtype=T.bool)
-        self.data['episode'] = T.zeros((capacity,), dtype=T.long)
-        self.data['player'] = T.zeros((capacity,), dtype=T.long)
+        # self.data = {}
+        # self.data['state'] = T.zeros((capacity, max_seq_len, 74, 74, 16), dtype=T.float)
+        # self.data['seq_len'] = T.zeros((capacity,), dtype=T.long)
+        # self.data['action'] = T.zeros((capacity, max_seq_len, 2), dtype=T.long)
+        # self.data['was_trade'] = T.zeros((capacity, max_seq_len), dtype=T.bool)
+        # self.data['reward'] = T.zeros((capacity, max_seq_len), dtype=T.float)
+        # self.data['lstm_state'] = T.zeros((capacity, max_seq_len, 32), dtype=T.float)
+        # self.data['lstm_cell'] = T.zeros((capacity, max_seq_len, 32), dtype=T.float)
+        # self.data['done'] = T.zeros((capacity,), dtype=T.bool)
+        # self.data['episode'] = T.zeros((capacity,), dtype=T.long)
+        # self.data['player'] = T.zeros((capacity,), dtype=T.long)
+        self.data: Deque[Holders] = deque(maxlen=self._capacity)
+
+        # self._next_idx = self._size % self._capacity
+        self.prios += self._max_priority ** self._alpha
 
     def sample(self, n):
         sample_inds, prob = self._sample_indices(n)
 
-        weights = (self._size * prob) ** (-self._beta)
+        weights = (self.mem_size * prob) ** (-self._beta)
         weights = weights.clip(0, 1)
 
         samples = {
             'inds': sample_inds,
-            'weights': weights
+            'weights': weights,
+            'transition': type(self.data[0]).stack([self.data[i] for i in sample_inds], pad_dim=0, dim=0)
         }
-        for k, v in self.data.items():
-            samples[k] = v[sample_inds]
+        # for k, v in self.data.items():
+        #     samples[k] = v[sample_inds]
 
         return samples
 
     def add(self,
-            state: T.Tensor,
-            action: T.Tensor,
-            was_trade: T.Tensor,
-            reward: T.Tensor,
-            td_error: T.Tensor,
-            lstm_state: T.Tensor,
-            lstm_cell: T.Tensor,
-            done: bool,
-            episode: int,
-            player: int
+            transition: Holders
+            # state: T.Tensor,
+            # action: T.Tensor,
+            # was_trade: T.Tensor,
+            # reward: T.Tensor,
+            # td_error: T.Tensor,
+            # lstm_state: T.Tensor,
+            # lstm_cell: T.Tensor,
+            # done: bool,
+            # episode: int,
+            # player: int
             ) -> None:
-
-        if self.is_full:
-            # idx = self.min_prio_idx
-            if td_error.item() < self.data['prio'][self.min_prio_idx]:
-                return
+        # if self.is_full:
+        #     # idx = self.min_prio_idx
+        #     if td_error.item() < self.data['prio'][self.min_prio_idx]:
+        #         return
         # else:
-        idx = self._next_idx
-        self._next_idx = (idx + 1) % self._capacity
+        # idx = self._next_idx
+        # self._next_idx = (idx + 1) % self._capacity
 
-        state = state.squeeze()
-        reward = reward.squeeze()
-        was_trade = was_trade.squeeze()
+        # state = state.squeeze()
+        # reward = reward.squeeze()
+        # was_trade = was_trade.squeeze()
 
-        self.data['state'][idx, :len(state)] = state
-        self.data['action'][idx, :len(action)] = action
-        self.data['was_trade'][idx, :len(was_trade)] = was_trade
-        self.data['reward'][idx, :len(reward)] = reward
-        self.data['lstm_state'][idx, :len(lstm_state)] = lstm_state
-        self.data['lstm_cell'][idx, :len(lstm_cell)] = lstm_cell
-        self.data['seq_len'][idx] = len(state)
-        self.data['done'][idx] = done
-        self.data['episode'][idx] = episode
-        self.data['player'][idx] = player
-        self.data['prio'][idx] = min(td_error.item(), self._max_priority) ** self._alpha
+        # self.data['state'][idx, :len(state)] = state
+        # self.data['action'][idx, :len(action)] = action
+        # self.data['was_trade'][idx, :len(was_trade)] = was_trade
+        # self.data['reward'][idx, :len(reward)] = reward
+        # self.data['lstm_state'][idx, :len(lstm_state)] = lstm_state
+        # self.data['lstm_cell'][idx, :len(lstm_cell)] = lstm_cell
+        # self.data['seq_len'][idx] = len(state)
+        # self.data['done'][idx] = done
+        # self.data['episode'][idx] = episode
+        # self.data['player'][idx] = player
+        # self.data['prio'][idx] = min(td_error.item(), self._max_priority) ** self._alpha
+        #
+        # self._size = min(self._capacity, self._size + 1)
+        self.data.append(transition)
+        self.prios[:self.mem_size] = self._max_priority ** self._alpha
 
-        self._size = min(self._capacity, self._size + 1)
-
+    @property
+    def mem_size(self):
+        return len(self.data)
 
 class OnDiskBuffer(PrioReplayBuffer):
     def __init__(self,

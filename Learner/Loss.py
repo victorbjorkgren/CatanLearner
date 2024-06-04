@@ -4,7 +4,7 @@ import torch as T
 import torch.nn.functional as F
 
 from Learner.Nets import GameNet
-from Learner.Utils import TensorUtils
+from Learner.Utility.Utils import TensorUtils
 
 
 class Loss:

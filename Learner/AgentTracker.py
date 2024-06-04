@@ -54,6 +54,8 @@ class AgentTracker:
 
         os.makedirs('./PastTitans/', exist_ok=True)
         self.contestants = os.listdir('./PastTitans/')
+        if len(self.contestants) == 0:
+            method = 'random'
 
         champions = []
         if method == 'random':
@@ -84,8 +86,8 @@ class AgentTracker:
             elif champions[i] in self.checkpoint_elo:
                 elo = self.checkpoint_elo[champions[i]]
             else:
-                e = f"Could not find ELO for agent {champions[i]}"
-                raise RuntimeError(e)
+                print(f"Could not find ELO for agent {champions[i]}")
+                elo = 1000
             agent.load_state(champions[i], epsilons[i], elo)
 
     def shuffle_agents(self):

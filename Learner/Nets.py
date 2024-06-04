@@ -1,4 +1,6 @@
 import os
+from abc import abstractmethod
+from collections import namedtuple
 from datetime import datetime
 from typing import Tuple
 
@@ -6,63 +8,65 @@ import torch
 import torch as T
 import torch.nn as nn
 import torch_geometric as pyg
+from torch import Tensor
 from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 
 from Environment import Game
-from Environment.constants import N_RESOURCES
-from Learner.Utils import TensorUtils
+from Environment.constants import N_RESOURCES, N_ACTION_TYPES
+from Learner.Utility.ActionTypes import TradeAction
+from Learner.Utility.DataTypes import PPOTransition, NetInput
+from Learner.Utility.Utils import TensorUtils
 from Learner.Layers import MLP, PowerfulLayer, MultiHeadAttention
 
 
-class PlayerNet(nn.Module):
-    def __init__(self, in_features, out_features, n_embed, n_heads):
-        super(PlayerNet, self).__init__()
-        self.player_embedding = MLP(in_features, n_embed)
+class BaseNet(nn.Module):
+    def __init__(self, name):
+        super().__init__()
+        self.name = name
 
-        self.q = MLP(n_embed, n_embed // n_heads, final=True)
-        self.k = MLP(n_embed, n_embed // n_heads, final=True)
-        self.v = MLP(n_embed, n_embed // n_heads, final=True)
+    def clone_state(self, other):
+        self.load_state_dict(other.state_dict(), strict=False)
 
-        self.multi_head_attention = MultiHeadAttention(n_embed, n_heads)
+    def save(self, suffix):
+        if suffix == 'latest':
+            torch.save(self.state_dict(), f'./{self.name}_Agent_Titan.pth')
 
-        self.output = nn.Sequential(
-            MLP(n_embed, n_embed),
-            MLP(n_embed, out_features, final=True)
-        )
+            # Create BackUp
+            now = datetime.now()
+            now = now.strftime("%Y%m%d_%H%M%S")
+            os.makedirs('./NetBackup/', exist_ok=True)
+            torch.save(self.state_dict(), f'./NetBackup/{self.name}_state_{now}.pth')
+        else:
+            os.makedirs('./PastTitans/', exist_ok=True)
+            torch.save(self.state_dict(), f'./PastTitans/{self.name}_Agent_{suffix}.pth')
 
-    def forward(self, player_states, board_embedding):
-        player_states = self.player_embedding(player_states)
-        board_embedding = board_embedding[T.argwhere(T.nonzero(board_embedding))]
-
-        states = T.cat((player_states, board_embedding))
-        del player_states, board_embedding
-
-        q = self.q(states)
-        k = self.k(states)
-        v = self.v(states)
-
-        # Multi-head attention
-        attn_output = self.multi_head_attention(v, k, q)
-
-        # Final output
-        output = self.output(attn_output)
-        return output
+    def load(self, file: str | int):
+        if file == 'latest':
+            dir = './'
+            file = f'{self.name}_Agent_Titan.pth'
+        else:
+            dir = './PastTitans'
+        path = os.path.join(dir, file)
+        try:
+            self.load_state_dict(torch.load(path), strict=False)
+        except FileNotFoundError:
+            print(f'Could not find {file}')
 
 
-class GameNet(nn.Module):
+
+class CoreNet(BaseNet):
+    keys = ['action_type', 'action_matrix', 'action_trade', 'state_value', 'hn', 'cn']
+    Output = namedtuple('Output', keys)
+
     def __init__(self,
-                 net_config,
+                 net_config: dict,
                  batch_size=1,
-                 undirected_faces=True,
-                 ):
-        super(GameNet, self).__init__()
-
+                 undirected_faces=True, ) -> None:
+        super().__init__('Core')
         game = net_config['game']
         n_embed = net_config['n_embed']
         n_output = net_config['n_output']
         n_power_layers = net_config['n_power_layers']
-        on_device = net_config['on_device']
-        load_state = net_config['load_state']
 
         sparse_edge = game.board.state.edge_index.clone()
         sparse_face = game.board.state.face_index.clone()
@@ -70,9 +74,9 @@ class GameNet(nn.Module):
         n_edge_attr = game.board.state.num_node_features
         n_face_attr = game.board.state.face_attr.shape[1]
         n_player_attr = game.players[0].state.shape[0]
-        n_players = len(game.players)
+        self.n_players = len(game.players)
 
-        self.on_device = on_device
+        self.on_device = net_config['on_device']
         self.n_output = n_output
         self.n_embed = n_embed
         self.undirected_faces = undirected_faces
@@ -119,17 +123,19 @@ class GameNet(nn.Module):
         self.edge_adj_norm = TensorUtils.preprocess_adj(self.edge_adj, batch_size, add_self_loops=False)
         self.full_adj_norm = TensorUtils.preprocess_adj(self.full_adj, batch_size, add_self_loops=False)
 
-        self.node_embed = MLP(n_node_attr + n_players * n_player_attr + 2, n_embed, residual=False)
-        self.edge_embed = MLP(n_edge_attr + n_players * n_player_attr + 2, n_embed, residual=False)
+        self.node_embed = MLP(n_node_attr + self.n_players * n_player_attr + 2, n_embed, residual=False)
+        self.edge_embed = MLP(n_edge_attr + self.n_players * n_player_attr + 2, n_embed, residual=False)
         self.face_embed = MLP(n_face_attr, n_embed, residual=False)
 
-        self.action_value = MLP(n_embed, n_output, final=True)
-        self.state_value = MLP(n_embed, n_output, final=True)
+        self.action_value = MLP(n_embed, n_output, activated_out=True)
+        self.state_value = MLP(n_embed, n_output, activated_out=True)
 
-        self.action_trade_give = MLP(n_embed, N_RESOURCES * n_players, final=True)
-        self.action_trade_get = MLP(n_embed, N_RESOURCES * n_players, final=True)
-        self.state_trade_give = MLP(n_embed, N_RESOURCES * n_players, final=True)
-        self.state_trade_get = MLP(n_embed, N_RESOURCES * n_players, final=True)
+        self.action_trade_give = MLP(n_embed, N_RESOURCES * self.n_players, activated_out=True)
+        self.action_trade_get = MLP(n_embed, N_RESOURCES * self.n_players, activated_out=True)
+        self.state_trade_give = MLP(n_embed, N_RESOURCES * self.n_players, activated_out=True)
+        self.state_trade_get = MLP(n_embed, N_RESOURCES * self.n_players, activated_out=True)
+
+        self.action_type_head = MLP(n_embed, N_ACTION_TYPES * self.n_players, activated_out=True)
 
         self.lstm = nn.LSTM(n_embed, n_embed, batch_first=True)
 
@@ -144,16 +150,11 @@ class GameNet(nn.Module):
         self.full_mask = self.full_mask.to(self.on_device)
         self.out_matrix = self.out_matrix.to(self.on_device)
 
-        if load_state:
-            self.load('latest')
-
-    def forward(self,
-                observation: T.Tensor,
-                seq_lengths: T.Tensor,
-                h_in: T.Tensor,
-                c_in: T.Tensor
-                ) -> Tuple[T.Tensor, T.Tensor, T.Tensor, T.Tensor]:
-
+    def forward(self, transition: NetInput) -> Output:
+        observation = transition.state
+        seq_lengths = transition.seq_lens
+        h_in = transition.lstm_h[:1, :, :]
+        c_in = transition.lstm_c[:1, :, :]
         assert len(observation.shape) == 5, "QNet wants [B, T, N, N, F]"
         b, t, n, _, f = observation.shape
 
@@ -164,57 +165,21 @@ class GameNet(nn.Module):
         obs_matrix = self.feature_embedding(obs_matrix)
         obs_matrix = self.power_layers(obs_matrix)
         obs_matrix, hn, cn = self.temporal_layer(obs_matrix, seq_lengths, h_in, c_in)
-        action_matrix, state_matrix = self.action_value_heads(obs_matrix)
+        action_matrix, state_value = self.action_value_heads(obs_matrix)
 
         game_state = obs_matrix[:, :, -1, -1, :]
-        action_trade_get = self.action_trade_get(game_state).view((b, t, 5, 2))
-        action_trade_give = self.action_trade_give(game_state).view((b, t, 5, 2))
-        state_trade_get = self.state_trade_get(game_state).view((b, t, 5, 2))
-        state_trade_give = self.state_trade_give(game_state).view((b, t, 5, 2))
+        action_trade_get = self.action_trade_get(game_state).view((b, t, N_RESOURCES, self.n_players))
+        action_trade_give = self.action_trade_give(game_state).view((b, t, N_RESOURCES, self.n_players))
+        # state_trade_get = self.state_trade_get(game_state).view((b, t, N_RESOURCES, self.n_players))
+        # state_trade_give = self.state_trade_give(game_state).view((b, t, N_RESOURCES, self.n_players))
 
-        action_trade = T.stack((action_trade_give, action_trade_get), dim=2)
-        state_trade = T.stack((state_trade_give, state_trade_get), dim=2)
+        action_trade = TradeAction(give=action_trade_give, get=action_trade_get)
+        # action_trade = T.stack((action_trade_give, action_trade_get), dim=2)
+        # state_trade = T.stack((state_trade_give, state_trade_get), dim=2)
 
-        mean_action = TensorUtils.nn_sum(action_matrix, [2, 3]) / self.n_possible_actions
-        q_matrix = action_matrix + (state_matrix - mean_action)
-
-        # Mask invalid actions
-        b, s, n, _, f = q_matrix.shape
-        neg_mask = ~self.action_mask[None, :, :, :, None].repeat(b, s, 1, 1, f)
-        q_matrix[neg_mask] = -T.inf
-
-        mean_trade = TensorUtils.nn_sum(action_trade, [2, 3]) / N_RESOURCES
-        q_trade = action_trade + (state_trade - mean_trade)
-        return q_matrix, q_trade, hn, cn
-
-    def temporal_layer(
-            self,
-            obs_matrix: T.Tensor,
-            seq_lengths: T.Tensor,
-            h_in: T.Tensor,
-            c_in: T.Tensor
-    ) -> Tuple[T.Tensor, T.Tensor, T.Tensor]:
-        try:
-            packed_matrix = pack_padded_sequence(
-                obs_matrix[:, :, -1, -1, :],
-                seq_lengths,
-                batch_first=True,
-                enforce_sorted=False
-            )
-        except RuntimeError:
-            breakpoint()
-        packed_matrix, (hn, cn) = self.lstm(packed_matrix, (h_in, c_in))
-        temporal_matrix, _ = pad_packed_sequence(packed_matrix, batch_first=True)
-
-        # Add temporal matrix to all elements of observation matrix
-        obs_matrix[:, :temporal_matrix.shape[1]] = (
-
-                temporal_matrix[:, :, None, None, :]
-                + obs_matrix[:, :temporal_matrix.shape[1]]
-
-        )
-
-        return obs_matrix, hn, cn
+        action_type = self.action_type_head(game_state).view((b, t, N_ACTION_TYPES, self.n_players))
+        # ['action_type', 'action_matrix', 'state_matrix', 'action_trade' 'state_trade', 'hn', 'cn']
+        return self.Output(action_type, action_matrix, action_trade, state_value, hn, cn)
 
     def feature_embedding(self, observation):
         batch, seq, n, _, f = observation.shape
@@ -235,37 +200,48 @@ class GameNet(nn.Module):
 
         x_flat = observation.view(batch * seq, n * n, f)
         action_matrix = T.zeros((batch * seq, n * n, self.n_output), dtype=T.float).to(self.on_device)
-        state_matrix = T.zeros((batch * seq, n * n, self.n_output), dtype=T.float).to(self.on_device)
+        # state_value = T.zeros((batch * seq, self.n_output), dtype=T.float).to(self.on_device)
 
         action_matrix[:, self.full_mask] = self.action_value(x_flat[:, self.full_mask])
-        state_matrix[:, self.full_mask] = self.state_value(x_flat[:, self.full_mask])
+        state_value = self.state_value(x_flat[:, -1, :])
 
         action_matrix = action_matrix.reshape(batch, seq, n, n, self.n_output)
-        state_matrix = state_matrix.reshape(batch, seq, n, n, self.n_output)
+        state_value = state_value.reshape(batch, seq, self.n_output)
 
-        return action_matrix, state_matrix
+        return action_matrix, state_value
 
-    def clone_state(self, other):
-        self.load_state_dict(other.state_dict(), strict=False)
+    def temporal_layer(self,
+                       obs_matrix: T.Tensor,
+                       seq_lengths: T.Tensor,
+                       h_in: T.Tensor,
+                       c_in: T.Tensor
+                       ) -> Tuple[T.Tensor, T.Tensor, T.Tensor]:
+        # try:
+        #     packed_matrix = pack_padded_sequence(
+        #         obs_matrix[:, :, -1, -1, :],
+        #         seq_lengths,
+        #         batch_first=True,
+        #         enforce_sorted=False
+        #     )
+        # except RuntimeError:
+        #     breakpoint()
+        #     raise RuntimeError
+        try:
+            temporal_element, (hn, cn) = self.lstm(obs_matrix[:, :, -1, -1, :], (h_in, c_in))
+        except:
+            breakpoint()
+        # temporal_matrix, _ = pad_packed_sequence(packed_matrix, batch_first=True)
 
-    def save(self, suffix):
-        if suffix == 'latest':
-            torch.save(self.state_dict(), f'./Q_Agent_Titan.pth')
+        # Add temporal matrix to all elements of observation matrix
+        # obs_matrix[:, :temporal_matrix.shape[1]] = (
+        #
+        #         temporal_matrix[:, :, None, None, :]
+        #         + obs_matrix[:, :temporal_matrix.shape[1]]
+        #
+        # )
+        obs_matrix = obs_matrix + temporal_element[:, :, None, None, :]
 
-            # Create BackUp
-            now = datetime.now()
-            now = now.strftime("%Y%m%d_%H%M%S")
-            os.makedirs('./NetBackup/', exist_ok=True)
-            torch.save(self.state_dict(), f'./NetBackup/q_net_state_{now}.pth')
-        else:
-            os.makedirs('./PastTitans/', exist_ok=True)
-            torch.save(self.state_dict(), f'./PastTitans/Q_Agent_{suffix}.pth')
-
-    def load(self, file: str | int):
-        if file == 'latest':
-            self.load_state_dict(torch.load(f'./Q_Agent_Titan.pth'), strict=False)
-        else:
-            self.load_state_dict(torch.load(f'./PastTitans/{file}'), strict=False)
+        return obs_matrix, hn, cn
 
     def get_dense(self, game: Game) -> Tuple[T.Tensor, int]:
         node_x, edge_x, face_x = self.extract_attr(game)
@@ -274,7 +250,7 @@ class GameNet(nn.Module):
         mask = T.zeros(1, 74, 74, 2)
         mask[:, p0_mask[0, :], p0_mask[1, :], 0] = 1
         mask[:, p1_mask[0, :], p1_mask[1, :], 1] = 1
-        mask[:, -1, -1, :] = 1
+        mask[:, -1, -1, :] = game.can_no_op()
 
         # Normalize-ish
         node_x /= 10
@@ -311,8 +287,144 @@ class GameNet(nn.Module):
     @staticmethod
     def mask_util(game: Game, player) -> T.Tensor:
         # road_mask, village_mask = get_dense_masks(game, player)
-        road_mask = game.board.sparse_road_mask(player, game.players[player].hand, game.first_turn)
-        village_mask = game.board.sparse_village_mask(player, game.players[player].hand, game.first_turn)
+        road_mask = game.board.sparse_road_mask(player, game.players[player].hand, game.first_turn and not game.first_turn_village_switch)
+        village_mask = game.board.sparse_village_mask(player, game.players[player].hand, game.first_turn and game.first_turn_village_switch)
 
         mask = T.cat((road_mask, village_mask.repeat(2, 1)), dim=1)
         return mask
+
+class PlayerNet(BaseNet):
+    def __init__(self, in_features, out_features, n_embed, n_heads):
+        super().__init__('Player')
+        self.player_embedding = MLP(in_features, n_embed)
+
+        self.q = MLP(n_embed, n_embed // n_heads, activated_out=True)
+        self.k = MLP(n_embed, n_embed // n_heads, activated_out=True)
+        self.v = MLP(n_embed, n_embed // n_heads, activated_out=True)
+
+        self.multi_head_attention = MultiHeadAttention(n_embed, n_heads)
+
+        self.output = nn.Sequential(
+            MLP(n_embed, n_embed),
+            MLP(n_embed, out_features, activated_out=True)
+        )
+
+    def forward(self, player_states, board_embedding):
+        player_states = self.player_embedding(player_states)
+        board_embedding = board_embedding[T.argwhere(T.nonzero(board_embedding))]
+
+        states = T.cat((player_states, board_embedding))
+        del player_states, board_embedding
+
+        q = self.q(states)
+        k = self.k(states)
+        v = self.v(states)
+
+        # Multi-head attention
+        attn_output = self.multi_head_attention(v, k, q)
+
+        # Final output
+        output = self.output(attn_output)
+        return output
+
+
+class GameNet(BaseNet):
+    def __init__(self,
+                 net_config,
+                 name,
+                 batch_size=1,
+                 undirected_faces=True,
+                 ):
+        super().__init__(name)
+        self.config = net_config
+        self.name = name
+        self.batch_size = batch_size
+        self.undirected_faces = undirected_faces
+        self.on_device = net_config['on_device']
+
+        self._core_net = CoreNet(net_config, batch_size, undirected_faces)
+
+        if self.config['load_state']:
+            self.load('latest')
+
+    def get_dense(self, game):
+        return self._core_net.get_dense(game)
+
+    @abstractmethod
+    def forward(self,
+                observation: T.Tensor,
+                seq_lengths: T.Tensor,
+                h_in: T.Tensor,
+                c_in: T.Tensor
+                ) -> Tuple[T.Tensor, T.Tensor, T.Tensor, T.Tensor]:
+
+        raise NotImplementedError
+
+
+class QNet(GameNet):
+    keys = ['q_matrix', 'trade_matrix', 'hn', 'cn']
+    Output = namedtuple('Output', keys)
+
+    def __init__(self,
+                 net_config,
+                 batch_size=1,
+                 undirected_faces=True,
+                 ):
+        super().__init__(net_config, 'Q', batch_size, undirected_faces)
+
+    def forward(self,
+                observation: T.Tensor,
+                seq_lengths: T.Tensor,
+                h_in: T.Tensor,
+                c_in: T.Tensor
+                ) -> Tuple[T.Tensor, T.Tensor, T.Tensor, T.Tensor]:
+        assert len(observation.shape) == 5, "QNet wants [B, T, N, N, F]"
+
+        core = self._core_net(observation, seq_lengths, h_in, c_in)
+
+        mean_action = TensorUtils.nn_sum(core.action_matrix, [2, 3]) / self.n_possible_actions
+        q_matrix = core.action_matrix + (core.state_matrix - mean_action)
+
+        # Mask invalid actions
+        b, s, n, _, f = q_matrix.shape
+        neg_mask = ~self._core_net.action_mask[None, :, :, :, None].repeat(b, s, 1, 1, f)
+        q_matrix[neg_mask] = -T.inf
+
+        mean_trade = TensorUtils.nn_sum(core.action_trade, [2, 3]) / N_RESOURCES
+        q_trade = core.action_trade + (core.state_trade - mean_trade)
+        return q_matrix, q_trade, core.hn, core.cn
+
+
+class PPONet(GameNet):
+    keys = ['pi_type', 'pi_map', 'pi_trade', 'state_value', 'hn', 'cn']
+    Output = namedtuple('Output', keys)
+
+    def __init__(self,
+                 net_config,
+                 batch_size=1,
+                 undirected_faces=True,
+                 ):
+        super().__init__(net_config, 'PPO', batch_size, undirected_faces)
+
+        if net_config['load_state']:
+            self.load('latest')
+
+    def forward(self, transition: PPOTransition) -> Output:
+        core = self._core_net(transition)
+        pi_type = core.action_type.softmax(-2)
+        pi_map = self.masked_softmax(core.action_matrix)
+        pi_trade = TradeAction(give=core.action_trade.give.softmax(-2), get=core.action_trade.get.softmax(-2))
+        return self.Output(pi_type, pi_map, pi_trade, core.state_value, core.hn, core.cn)
+
+    def masked_softmax(self, action_logits: Tensor) -> Tensor:
+        b, s, n, _, f = action_logits.shape
+        action_mask = self._core_net.action_mask[None, :, :, :, None].repeat(b, s, 1, 1, f)
+        z = torch.exp(action_logits) * action_mask
+        sum_z = TensorUtils.nn_sum(z, [2, 3])
+        sum_z[sum_z == 0] = 1
+        action_probs = z / sum_z
+
+        # TODO: Correction for out of sequence states
+        # action_probs[action_probs.sum(-1) == 0] = 1 / action_probs.shape[-1]
+
+        return action_probs

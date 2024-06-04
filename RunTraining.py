@@ -7,9 +7,10 @@ from tqdm import tqdm
 from Environment import Game
 from Learner.AgentTracker import AgentTracker
 from Learner.Agents import QAgent
-from Learner.Nets import GameNet
-from Learner.PrioReplayBuffer import PrioReplayBuffer, OnDiskBuffer
-from Learner.Trainer import Trainer
+from Learner.Agents.PPOAgent import PPOAgent
+from Learner.Nets import GameNet, PPONet
+from Learner.PrioReplayBuffer import PrioReplayBuffer, OnDiskBuffer, InMemBuffer
+from Learner.Trainer import QTrainer, PPOTrainer
 from Learner.constants import *
 
 writer = SummaryWriter()
@@ -35,37 +36,59 @@ actor_net_init = {
     'load_state': LOAD_Q_NET
 }
 
-learner_q_net = GameNet(learner_net_init).to(LEARNER_DEVICE)
-target_q_net = GameNet(learner_net_init).to(LEARNER_DEVICE)
-target_q_net.clone_state(learner_q_net)
-actor_q_net_list = [GameNet(actor_net_init).to(ACTOR_DEVICE) for _ in range(N_PLAYERS)]
+# learner_q_net = GameNet(learner_net_init).to(LEARNER_DEVICE)
+# target_q_net = GameNet(learner_net_init).to(LEARNER_DEVICE)
+# target_q_net.clone_state(learner_q_net)
+# actor_q_net_list = [GameNet(actor_net_init).to(ACTOR_DEVICE) for _ in range(N_PLAYERS)]
 
-buffer = OnDiskBuffer(
+learner_net = PPONet(learner_net_init, batch_size=BATCH_SIZE)
+actor_net_list = [PPONet(actor_net_init, batch_size=BATCH_SIZE) for _ in range(N_PLAYERS)]
+
+buffer = InMemBuffer(
     alpha=REPLAY_ALPHA,
     beta=REPLAY_BETA,
-    capacity=REPLAY_MEMORY_SIZE,
+    # capacity=REPLAY_MEMORY_SIZE,
+    capacity=BATCH_SIZE,
     max_seq_len=MAX_SEQUENCE_LENGTH,
-    preload_size=BATCH_SIZE * 4,
-    batch_size=BATCH_SIZE
+    # preload_size=BATCH_SIZE * 4,
+    # batch_size=BATCH_SIZE
 )
-trainer = Trainer(
-    q_net=learner_q_net,
-    target_net=target_q_net,
+# trainer = QTrainer(
+#     q_net=learner_q_net,
+#     target_net=target_q_net,
+#     buffer=buffer,
+#     batch_size=BATCH_SIZE,
+#     gamma=GAMMA,
+#     learning_rate=LEARNING_RATE,
+#     reward_scale=REWARD_SCALE
+# )
+trainer = PPOTrainer(
+    net=learner_net,
     buffer=buffer,
     batch_size=BATCH_SIZE,
     gamma=GAMMA,
     learning_rate=LEARNING_RATE,
     reward_scale=REWARD_SCALE
 )
+# agent_list = [
+#     QAgent(
+#         q_net=net,
+#         game=game,
+#         buffer=buffer,
+#         max_sequence_length=MAX_SEQUENCE_LENGTH,
+#         burn_in_length=BURN_IN_LENGTH
+#     )
+#     for net in actor_q_net_list
+# ]
 agent_list = [
-    QAgent(
-        q_net=net,
+    PPOAgent(
+        net=net,
         game=game,
         buffer=buffer,
         max_sequence_length=MAX_SEQUENCE_LENGTH,
         burn_in_length=BURN_IN_LENGTH
     )
-    for net in actor_q_net_list
+    for net in actor_net_list
 ]
 agent_tracker = AgentTracker(
     eps_min=EPS_MIN,
@@ -94,10 +117,10 @@ learner_thread.start()
 
 iterator = tqdm(range(MAX_STEPS))
 for i in iterator:
-    observation, obs_player = actor_q_net_list[0].get_dense(game)
-    action, raw_action = game.current_agent.sample_action(observation, i_am_player=game.current_player)
+    observation, obs_player = actor_net_list[0].get_dense(game)
+    action = game.current_agent.sample_action(observation, i_am_player=game.current_player)
     reward, done, succeeded = game.step(action)
-    game.player_agents[obs_player].update_reward(reward, done, obs_player)
+    game.player_agents[obs_player].update_reward(reward, done, game, obs_player)
     game.player_agents[obs_player].signal_failure(not succeeded)
 
     # On episode termination

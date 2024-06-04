@@ -3,6 +3,7 @@ N_NODES = 54
 N_TILES = 19
 N_TILE_TYPES = 6
 N_RESOURCES = 5
+N_ACTION_TYPES = 3
 
 TILE_NAMES = ['Bandit', 'Brick', 'Grain', 'Ore', 'Lumber', 'Wool']
 TILE_NUMBERS = [5, 2, 6, 3, 8, 10, 9, 12, 11, 4, 8, 10, 9, 4, 5, 6, 3, 11]

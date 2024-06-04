@@ -4,15 +4,10 @@ import torch.nn.functional as F
 
 
 class MLP(nn.Module):
-    def __init__(self,
-                 in_features: int,
-                 out_features: int,
-                 final: bool = False,
-                 feature_dim: int = -1,
-                 residual: bool = False
-                 ) -> None:
+    def __init__(self, in_features: int, out_features: int, activated_out: bool = False, feature_dim: int = -1,
+                 residual: bool = False) -> None:
         super(MLP, self).__init__()
-        self.final = final
+        self.final = activated_out
         assert feature_dim in [-1, 1]
         self.feature_dim = feature_dim
         hidden = max(in_features, out_features)
@@ -59,9 +54,9 @@ def norm(adj):
 class PowerfulLayer(nn.Module):
     def __init__(self, in_features: int, out_features: int, adj_norm: T.Tensor) -> None:
         super(PowerfulLayer, self).__init__()
-        self.adj_norm = adj_norm.unsqueeze(-1)
-        self.mask = adj_norm > 0
-        self.mask = self.mask.view(1, -1).squeeze()
+        self.mask = adj_norm[:1] > 0
+        self.mask = self.mask.view(-1)
+        self.adj_norm = adj_norm[:1, None, :, :, None]
 
         self.m1 = MLP(in_features, out_features, feature_dim=-1)
         self.m2 = MLP(in_features, out_features, feature_dim=-1)
@@ -72,7 +67,6 @@ class PowerfulLayer(nn.Module):
         matrix shape = (Batch, Seq, N, N, feat)
         """
         b, s, n, _, f = matrix.shape
-
         matrix = matrix.view(b * s, n * n, f)
         out1 = T.zeros_like(matrix)
         out2 = T.zeros_like(matrix)
@@ -80,6 +74,7 @@ class PowerfulLayer(nn.Module):
         # Feature Embedding
         out1[:, self.mask] = self.m1(matrix[:, self.mask])
         out2[:, self.mask] = self.m2(matrix[:, self.mask])
+
 
         # Message Propagation
         matrix = matrix.reshape(b, s, n, n, f)

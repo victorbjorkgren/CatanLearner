@@ -1,48 +1,40 @@
 import os
+from abc import abstractmethod
 from time import sleep
 
+import torch
 import torch as T
 import torch.nn as nn
 import torch.optim as optim
 
+from Learner.Utility.DataTypes import PPOTransition, NetInput
+from Learner.constants import PPO_ENTROPY_COEF, PPO_VALUE_COEF
+from Learner.Utility.CustomDistributions import CatanActionSampler
 from Learner.Loss import Loss
 from Learner.Nets import GameNet
 from Learner.PrioReplayBuffer import PrioReplayBuffer
-from Learner.Utils import TensorUtils
+from Learner.Utility.Utils import TensorUtils, LinearSchedule
 from Learner.constants import LOSS_CLIP, GRAD_CLIP
 
 
 class Trainer:
-    def __init__(self,
-                 q_net: GameNet,
-                 target_net: GameNet,
-                 buffer: PrioReplayBuffer,
-                 batch_size: int,
-                 gamma: float,
-                 learning_rate: float,
-                 reward_scale: float
-                 ):
-        self.q_net = q_net
-        self.target_net = target_net
+    def __init__(self, buffer: PrioReplayBuffer, batch_size: int, gamma: float, net: GameNet):
+        self.name = 'Base_Agent'
         self.buffer = buffer
-        self.batch_size = batch_size
         self.gamma = gamma
-        self.reward_scale = reward_scale
-        self.optimizer = optim.Adam(self.q_net.parameters(), lr=learning_rate, weight_decay=1e-5)
-        self.batch_range = T.arange(self.batch_size, dtype=T.long)
-
-        self.tick_iter = 0
-        self.find_start_tick()
+        self.batch_size = batch_size
+        self.net = net
 
         self.known_allowed_states = None
+        self.tick_iter = 0
 
-    def find_start_tick(self):
-        str_start = len("Q_Agent") + 1
-        str_end = len(".pth")
-        os.makedirs('./PastTitans/', exist_ok=True)
-        files = os.listdir('./PastTitans/')
-        checkpoints = [int(f[str_start:-str_end]) for f in files] + [0]
-        self.tick_iter = 1 + max(checkpoints)
+        self.batch_range = T.arange(self.batch_size, dtype=T.long)
+
+        self.find_start_tick()
+
+    @abstractmethod
+    def train(self) -> float:
+        raise NotImplementedError
 
     def tick(self):
         if self.buffer.mem_size < self.batch_size:
@@ -59,6 +51,45 @@ class Trainer:
         self.tick_iter += 1
 
         return td_loss
+
+    def find_start_tick(self):
+        str_start = len(self.name) + 1
+        str_end = len(".pth")
+        os.makedirs('./PastTitans/', exist_ok=True)
+        files = os.listdir('./PastTitans/')
+        checkpoints = [int(f[str_start:-str_end]) for f in files] + [0]
+        self.tick_iter = 1 + max(checkpoints)
+
+    def save(self, method):
+        assert method in ['latest', 'checkpoint']
+        if method == 'latest':
+            self.net.save('latest')
+        else:
+            self.net.save(self.tick_iter)
+
+    def update_known_allowed(self, state_mask):
+        if self.known_allowed_states is None:
+            self.known_allowed_states = state_mask.clone().detach().any(0).squeeze()
+        else:
+            self.known_allowed_states = state_mask.clone().detach().any(0).squeeze() | self.known_allowed_states
+
+
+class QTrainer(Trainer):
+    def __init__(self,
+                 q_net: GameNet,
+                 target_net: GameNet,
+                 buffer: PrioReplayBuffer,
+                 batch_size: int,
+                 gamma: float,
+                 learning_rate: float,
+                 reward_scale: float
+                 ):
+        super().__init__(buffer, batch_size, gamma, q_net)
+        self.name = 'Q_Agent'
+        self.q_net = q_net
+        self.target_net = target_net
+        self.reward_scale = reward_scale
+        self.optimizer = optim.Adam(self.q_net.parameters(), lr=learning_rate, weight_decay=1e-5)
 
     def train(self) -> float:
         assert self.buffer.mem_size >= self.batch_size
@@ -134,19 +165,6 @@ class Trainer:
 
         return td_error.mean().item()
 
-    def save(self, method):
-        assert method in ['latest', 'checkpoint']
-        if method == 'latest':
-            self.q_net.save('latest')
-        else:
-            self.q_net.save(self.tick_iter)
-
-    def update_known_allowed(self, state_mask):
-        if self.known_allowed_states is None:
-            self.known_allowed_states = state_mask.clone().detach().any(0).squeeze()
-        else:
-            self.known_allowed_states = state_mask.clone().detach().any(0).squeeze() | self.known_allowed_states
-
     def get_rule_break_q(self, q: T.Tensor, state_mask: T.Tensor) -> T.Tensor:
         self.update_known_allowed(state_mask)
         rule_mask = (~state_mask.squeeze() & self.known_allowed_states)
@@ -158,3 +176,86 @@ class Trainer:
             rule_breaking_q = T.zeros((1,))
 
         return rule_breaking_q
+
+
+class PPOTrainer(Trainer):
+    def __init__(self,
+                 net: GameNet,
+                 buffer: PrioReplayBuffer,
+                 batch_size: int,
+                 gamma: float,
+                 learning_rate: float,
+                 reward_scale: float
+                 ):
+        super().__init__(buffer, batch_size, gamma, net)
+        self.name = 'PPO_Agent'
+        self.reward_scale = reward_scale
+        self.optimizer = optim.Adam(self.net.parameters(), lr=learning_rate, weight_decay=1e-5)
+
+        self.clip_epsilon = LinearSchedule(
+            begin_t=0,
+            end_t=100_000_000,  # Learner step_t is often faster than worker TODO: Adapt this?
+            begin_value=.12,
+            end_value=.02,
+        )
+
+    def proximal_policy_loss(self, pi_logprobs, behavior_logprob, advantages):
+        ratio = torch.exp(pi_logprobs.squeeze(-1) - behavior_logprob)
+        clipped_ratios = torch.clamp(
+            ratio,
+            1.0 - self.clip_epsilon(self.tick_iter),
+            1.0 + self.clip_epsilon(self.tick_iter)
+        )
+        policy_loss = torch.min(ratio * advantages.detach(), clipped_ratios * advantages.detach())
+        return policy_loss
+
+    def train(self) -> float:
+        assert self.buffer.mem_size >= self.batch_size
+
+        sample = self.buffer.sample(self.batch_size)
+        inds = sample["inds"]
+        transition: PPOTransition = sample["transition"].to(self.net.on_device)
+        batch_range = self.batch_range[:inds.shape[0]]
+
+
+        done = transition.reward_pack.done
+        value = transition.action_pack.value
+        if done.sum() > 0:
+            breakpoint()
+        b, t = value.shape
+        mask = (torch.arange(t)[None, :] >= transition.seq_lens.squeeze()[:, None]).to(self.net.on_device)
+
+        reward = transition.reward_pack.reward * self.reward_scale
+        advantage, returns = TensorUtils.advantage_estimation(reward, transition.action_pack.value, transition.reward_pack.done, self.gamma)
+
+        net_output = self.net(sample['transition'].as_net_input)
+        pi_type = net_output.pi_map[batch_range, :, :, :, transition.reward_pack.player]
+        pi_map = net_output.pi_map[batch_range, :, :, :, transition.reward_pack.player]
+        pi_trade = net_output.pi_trade[batch_range, :, :, :, transition.reward_pack.player]
+
+        pi_dist = CatanActionSampler(pi_type=pi_type, pi_map=pi_map, pi_trade=pi_trade)
+
+        # Policy Loss
+        pi_logprob = pi_dist.log_prob(transition.action)
+        policy_loss = self.proximal_policy_loss(pi_logprob, transition.log_prob, advantage)
+
+        # Value Loss
+        value_loss = 0.5 * torch.square(returns - transition.values.squeeze())
+
+        # Entropy Loss
+        entropy_loss = pi_dist.entropy()
+
+        # Set loss out of sequence to zero
+        policy_loss = policy_loss * mask
+        entropy_loss = entropy_loss * mask
+        value_loss = value_loss * mask
+
+        policy_loss = torch.mean(policy_loss)
+        entropy_loss = torch.mean(entropy_loss)
+        value_loss = torch.mean(value_loss)
+
+        # Combine policy loss, value loss, entropy loss.
+        # Negative sign to indicate we want to maximize the policy gradient objective function and entropy to encourage exploration
+        loss = -(policy_loss + PPO_ENTROPY_COEF * entropy_loss) + PPO_VALUE_COEF * value_loss
+
+        return loss

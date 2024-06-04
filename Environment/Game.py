@@ -5,10 +5,13 @@ from typing import Any, Tuple, Optional, List
 import matplotlib.pyplot as plt
 import networkx as nx
 import numpy as np
+import torch
 import torch as T
+from torch import Tensor
 from torch_geometric.utils.convert import to_networkx
 
-from Learner.Agents import Agent
+from Learner.Agents import BaseAgent
+from Learner.Utility.ActionTypes import BaseAction, BuildAction, TradeAction, NoopAction
 from .Board import Board
 from .Player import Player
 from .constants import *
@@ -21,7 +24,7 @@ class Game:
         self.max_turns = max_turns
         self.episode = start_episode
 
-        self.player_agents: Optional[List[Agent]] = None
+        self.player_agents: Optional[List[BaseAgent]] = None
         self.first_turn_village_switch: Optional[bool] = None
         self.first_turn: Optional[bool] = None
         self.current_player: Optional[int] = None
@@ -52,11 +55,28 @@ class Game:
         self.first_turn_village_switch = True
         self.publish('reset')
 
-    def register_agents(self, player_agents: [Agent, Agent]):
+    def register_agents(self, player_agents: [BaseAgent, BaseAgent]):
         assert len(player_agents) == self.n_players
         self.player_agents = player_agents
 
-    def step(self, action: T.Tensor, render: bool = False) -> tuple[float, bool, bool]:
+    def decode_build_action(self, action: BuildAction):
+        build_action = action.mat_index
+        if build_action[0] != build_action[1]:
+            bool_hit = (
+                    (self.board.state.edge_index[0] == build_action[0])
+                    & (self.board.state.edge_index[1] == build_action[1])
+            )
+            index = torch.argwhere(bool_hit).item()
+            return torch.tensor((1, index))
+
+        elif build_action[0] == build_action[1]:
+            if build_action[0] >= 54:
+                raise RuntimeError("Non-node index returned for building settlement")
+            return torch.tensor((2, build_action[0]))
+        else:
+            raise RuntimeError("Invalid Build Action in QAgent")
+
+    def step(self, action: BaseAction, render: bool = False) -> tuple[float, bool, bool]:
         """Take one action step in the game. Returns reward, done, and the actual action."""
         succeeded = True
         reward = 0.
@@ -67,21 +87,20 @@ class Game:
             else:
                 return self.failed_action_penalty + reward, False, True
 
-        if action[0] == 1:
-            if not self.build_road(action[1], self.current_player):
-                succeeded = False
+        if isinstance(action, BuildAction):
+            action = self.decode_build_action(action)
+            if action[0] == 1:
+                if not self.build_road(action[1], self.current_player):
+                    succeeded = False
+            elif action[0] == 2:
+                if not self.build_village(action[1], self.current_player):
+                    succeeded = False
+                else:
+                    reward += 1
+        elif isinstance(action, TradeAction):
+            succeeded = self.players[self.current_player].trade(give_ind=action.give, get_ind=action.get)
 
-        elif action[0] == 2:
-            if not self.build_village(action[1], self.current_player):
-                succeeded = False
-            else:
-                reward += 1
-
-        # 4:1 trade
-        elif action[0] == 3:
-            succeeded = self.players[self.current_player].trade(action[1], action[2])
-
-        if action[0] == 0:
+        if isinstance(action, NoopAction):
             self.idle_turns += 1
             self.current_player = (self.current_player + 1) % self.n_players
             self.turn += 1 / self.n_players
@@ -98,16 +117,23 @@ class Game:
                 self.player_agents[self.current_player].register_victory()
             return reward, True, succeeded
 
-    def can_trade(self, player: int, rate: int) -> T.Tensor:
+    def can_trade(self, player: int, rate: int) -> Tensor:
         """
         Returns the inds that the player can trade at the asked rate
         :param player: index for the player to do the trade
         :param rate: rate for the trade
         :return: Tensor of tradeable inds
         """
-        return T.argwhere(self.players[player].hand >= rate)
+        if self.first_turn:
+            return torch.tensor([])
+        return torch.argwhere(self.players[player].hand >= rate)
 
-    def first_turn_step(self, action) -> Tuple[bool, float]:
+    def can_no_op(self):
+        return not self.first_turn
+
+    def first_turn_step(self, action: BuildAction) -> Tuple[bool, float]:
+        assert isinstance(action, BuildAction)
+        action = self.decode_build_action(action)
         reward = 0.
         if self.first_turn_village_switch:
             if action[0] == 2:
@@ -125,10 +151,10 @@ class Game:
 
             # Give resources to all villages, done twice for simplicity of reward assignment
             if self.players[self.current_player].n_roads == 2:
-                face_hits = T.nonzero(self.board.state.face_attr)
+                face_hits = torch.nonzero(self.board.state.face_attr)
                 for hit in face_hits:
                     self.give_resource(hit)
-                # good_place_to_start = self.players[self.current_player].hand >= T.tensor([1, 1, 0, 1, 1])
+                # good_place_to_start = self.players[self.current_player].hand >= torch.tensor([1, 1, 0, 1, 1])
                 # if good_place_to_start.all():
                 #     reward += 1
 
@@ -175,7 +201,7 @@ class Game:
                 hand.rob()
 
         # Find nodes attain resources
-        face_hits = T.argwhere(self.board.state.face_attr == dice)
+        face_hits = torch.argwhere(self.board.state.face_attr == dice)
         for hit in face_hits:
             self.give_resource(hit)
 
@@ -188,7 +214,7 @@ class Game:
                 self.players[i].add(resource.item(), gain.item())
 
     @staticmethod
-    def maritime_trade(player: Player, give: T.Tensor, get: T.Tensor, rate):
+    def maritime_trade(player: Player, give: Tensor, get: Tensor, rate):
         assert give.sum() == rate
 
         player.give(give)
