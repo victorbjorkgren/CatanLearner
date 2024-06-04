@@ -86,7 +86,7 @@ class Holders:
     #         if isinstance(val, Holders):
     #             t = val._max_t(dim)
     #         elif isinstance(val, Tensor):
-    #             if val.dim() > dim:
+    #             if val.ndim > dim:
     #                 t = val.shape[dim]
     #             else:
     #                 continue
@@ -137,7 +137,7 @@ class Holders:
             field_values = []
             for obj in obj_list:
                 field_value = getattr(obj, field_name)
-                # will_pad = pad_dim is not None and field_value.dim() > pad_dim
+                # will_pad = pad_dim is not None and field_value.ndim > pad_dim
                 # is_tensor = isinstance(field_value, Tensor)
                 # is_stackable = 'not_stackable' not in field_.metadata.keys()
                 # if will_pad and is_tensor and is_stackable:
@@ -185,7 +185,7 @@ class Holders:
         for field_ in fields(self):
             val = getattr(self, field_.name)
             if isinstance(val, Tensor):
-                assert val.dim() < 5, f'Tensor dim {val.dim()} must be less than 5 for mps'
+                assert val.ndim < 5, f'Tensor dim {val.ndim} must be less than 5 for mps'
                 if dims is not None:
                     for i in range(len(dims) - 1):  # Never checking f dim
                         assert val.shape[i] == dims[i], f'Tensor shape is {val.shape[i]} expected {dims[i]}'
@@ -218,7 +218,7 @@ class Holders:
 
     def dim(self):
         for field_ in fields(self):
-            return getattr(self, field_.name).dim()
+            return getattr(self, field_.name).ndim
         return self
 
     def requires_grad_(self):
@@ -519,9 +519,9 @@ class TensorUtils:
         Returns:
           Multi-step truncated generalized advantage estimation at times [0, k-1].
         """
-        assert value_t.dim() == 2
-        assert r_t.dim() == 3 and r_t.shape[2] == 1
-        assert done.dim() == 3 and done.shape[2] == 1
+        assert value_t.ndim == 2
+        assert r_t.ndim == 3 and r_t.shape[2] == 1
+        assert done.ndim == 3 and done.shape[2] == 1
         LAMBDA = 0.95
 
         r_t = r_t[:, :, 0]
@@ -565,7 +565,7 @@ class TensorUtils:
 
     @staticmethod
     def pad_tensor_dim(tensor, size, dim=1):
-        if tensor.dim() <= dim:
+        if tensor.ndim <= dim:
             return tensor
         if tensor.shape[dim] < size:
             target_shape = list(tensor.shape)

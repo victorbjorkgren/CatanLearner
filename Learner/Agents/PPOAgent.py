@@ -58,28 +58,23 @@ class PPOAgent(BaseAgent):
             )
             self.h0, self.c0 = net_out.hn, net_out.cn
 
-        pi_type = net_out.pi_type[0, 0, :, i_am_player]
-        pi_trade = TradeAction(
-            give=net_out.pi_trade.give[0, 0, :, i_am_player],
-            get=net_out.pi_trade.get[0, 0, :, i_am_player]
-        )
-        pi_map = net_out.pi_map[0, 0, :54, :54, i_am_player]
+        pi = self.net.get_pi(net_out, i_am_player)
 
-        pi_map[build_mask] = 0
-        pi_trade.give[trade_mask] = 0
-        pi_type[type_mapping.inverse[NoopAction]] *= no_op_mask
+        pi.map[build_mask] = 0
+        pi.trade.give[trade_mask] = 0
+        pi.type[type_mapping.inverse[NoopAction]] *= no_op_mask
 
-        if pi_trade.give.nonzero().numel() == 0:
+        if pi.trade.give.nonzero().numel() == 0:
             trade_type_ind = type_mapping.inverse[TradeAction]
-            pi_type[trade_type_ind] = 0
-            pi_trade.give += 1 / pi_trade.give.numel()
-        if pi_map.nonzero().numel() == 0:
+            pi.type[trade_type_ind] = 0
+            pi.trade.give += 1 / pi.trade.give.numel()
+        if pi.map.nonzero().numel() == 0:
             build_type_ind = type_mapping.inverse[BuildAction]
-            pi_type[build_type_ind] = 0
-            pi_map += 1 / pi_map.numel()
-        pi_type = pi_type / pi_type.sum(-1)
+            pi.type[build_type_ind] = 0
+            pi.map += 1 / pi.map.numel()
+        pi.type = pi.type / pi.type.sum(-1)
 
-        sampler = CatanActionSampler(pi_type, pi_map, pi_trade)
+        sampler = CatanActionSampler(pi)
         action = sampler.sample()
         # if isinstance(action, BuildAction):
         #     try:

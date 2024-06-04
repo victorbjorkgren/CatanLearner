@@ -13,7 +13,7 @@ from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 
 from Environment import Game
 from Environment.constants import N_RESOURCES, N_ACTION_TYPES
-from Learner.Utility.ActionTypes import TradeAction
+from Learner.Utility.ActionTypes import TradeAction, Pi
 from Learner.Utility.DataTypes import PPOTransition, NetInput
 from Learner.Utility.Utils import TensorUtils
 from Learner.Layers import MLP, PowerfulLayer, MultiHeadAttention
@@ -428,3 +428,24 @@ class PPONet(GameNet):
         # action_probs[action_probs.sum(-1) == 0] = 1 / action_probs.shape[-1]
 
         return action_probs
+
+    @staticmethod
+    def get_pi(net_out: Output, i_am_player: Tensor | int):
+        if isinstance(i_am_player, Tensor):
+            i_am_player = i_am_player.unsqueeze(-1)
+            pi_type = torch.gather(net_out.pi_type, -1, i_am_player.expand(-1, -1, 3, -1)).squeeze(-1)
+            pi_map = torch.gather(net_out.pi_map, -1, i_am_player.unsqueeze(-1).expand(-1, -1, 74, 74, -1)).squeeze(-1)
+            pi_trade = TradeAction(
+                give=torch.gather(net_out.pi_trade.give, -1, i_am_player.expand(-1, -1, 5, -1)).squeeze(-1),
+                get=torch.gather(net_out.pi_trade.get, -1, i_am_player.expand(-1, -1, 5, -1)).squeeze(-1),
+            )
+        elif isinstance(i_am_player, int):
+            pi_type = net_out.pi_type[0, 0, :, i_am_player]
+            pi_trade = TradeAction(
+                give=net_out.pi_trade.give[0, 0, :, i_am_player],
+                get=net_out.pi_trade.get[0, 0, :, i_am_player]
+            )
+            pi_map = net_out.pi_map[0, 0, :54, :54, i_am_player]
+        else:
+            raise TypeError
+        return Pi(type=pi_type, trade=pi_trade, map=pi_map)

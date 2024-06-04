@@ -8,7 +8,6 @@ from torch import Tensor
 from Learner.Utility.Utils import Holders
 
 
-
 class BaseAction(Holders):
     pass
 
@@ -21,11 +20,19 @@ class TradeAction(BaseAction):
 
 @dataclass
 class BuildAction(BaseAction):
-    mat_index: Tensor = field(default=None)
+    mat_index: Tensor
 
 
+@dataclass
 class NoopAction(BaseAction):
     pass
+
+
+@dataclass
+class Pi:
+    type: Tensor
+    map: Tensor
+    trade: TradeAction
 
 
 type_mapping = bidict({

@@ -11,7 +11,7 @@ from Learner.Utility.DataTypes import PPOTransition, NetInput
 from Learner.constants import PPO_ENTROPY_COEF, PPO_VALUE_COEF
 from Learner.Utility.CustomDistributions import CatanActionSampler
 from Learner.Loss import Loss
-from Learner.Nets import GameNet
+from Learner.Nets import GameNet, PPONet
 from Learner.PrioReplayBuffer import PrioReplayBuffer
 from Learner.Utility.Utils import TensorUtils, LinearSchedule
 from Learner.constants import LOSS_CLIP, GRAD_CLIP
@@ -180,13 +180,14 @@ class QTrainer(Trainer):
 
 class PPOTrainer(Trainer):
     def __init__(self,
-                 net: GameNet,
+                 net: PPONet,
                  buffer: PrioReplayBuffer,
                  batch_size: int,
                  gamma: float,
                  learning_rate: float,
                  reward_scale: float
                  ):
+        self.net: PPONet
         super().__init__(buffer, batch_size, gamma, net)
         self.name = 'PPO_Agent'
         self.reward_scale = reward_scale
@@ -217,30 +218,28 @@ class PPOTrainer(Trainer):
         transition: PPOTransition = sample["transition"].to(self.net.on_device)
         batch_range = self.batch_range[:inds.shape[0]]
 
-
         done = transition.reward_pack.done
         value = transition.action_pack.value
+        i_am_player = transition.reward_pack.player
         if done.sum() > 0:
             breakpoint()
         b, t = value.shape
         mask = (torch.arange(t)[None, :] >= transition.seq_lens.squeeze()[:, None]).to(self.net.on_device)
 
         reward = transition.reward_pack.reward * self.reward_scale
-        advantage, returns = TensorUtils.advantage_estimation(reward, transition.action_pack.value, transition.reward_pack.done, self.gamma)
+        advantage, returns = TensorUtils.advantage_estimation(reward, value, done, self.gamma)
 
         net_output = self.net(sample['transition'].as_net_input)
-        pi_type = net_output.pi_map[batch_range, :, :, :, transition.reward_pack.player]
-        pi_map = net_output.pi_map[batch_range, :, :, :, transition.reward_pack.player]
-        pi_trade = net_output.pi_trade[batch_range, :, :, :, transition.reward_pack.player]
+        pi = self.net.get_pi(net_output, i_am_player)
 
-        pi_dist = CatanActionSampler(pi_type=pi_type, pi_map=pi_map, pi_trade=pi_trade)
+        pi_dist = CatanActionSampler(pi)
 
         # Policy Loss
-        pi_logprob = pi_dist.log_prob(transition.action)
-        policy_loss = self.proximal_policy_loss(pi_logprob, transition.log_prob, advantage)
+        pi_logprob = pi_dist.log_prob(transition.action_pack.action)
+        policy_loss = self.proximal_policy_loss(pi_logprob, transition.action_pack.log_prob, advantage)
 
         # Value Loss
-        value_loss = 0.5 * torch.square(returns - transition.values.squeeze())
+        value_loss = 0.5 * torch.square(returns - value)
 
         # Entropy Loss
         entropy_loss = pi_dist.entropy()
