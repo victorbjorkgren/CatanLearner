@@ -27,7 +27,7 @@ EPS_ONE = .1  # Chance that epsilon becomes one
 # NETWORK
 N_POWER_LAYERS = 2
 N_HIDDEN_NODES = 32
-MAX_SEQUENCE_LENGTH = 100
+MAX_SEQUENCE_LENGTH = 1000
 BURN_IN_LENGTH = 20  # TODO: NOT USED, USE.
 
 # PPO
@@ -42,5 +42,5 @@ REPLAY_BETA = .8
 LOAD_Q_NET = True
 LOAD_BUFFER = True
 
-LEARNER_DEVICE = 'cuda' if T.cuda.is_available() else 'cpu'
+LEARNER_DEVICE = 'mps' if T.backends.mps.is_available() else 'cpu'
 ACTOR_DEVICE = 'cpu'

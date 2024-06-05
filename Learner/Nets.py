@@ -436,6 +436,8 @@ class PPONet(GameNet):
         if net_config['load_state']:
             self.load('latest')
 
+        self.to(self.on_device)
+
     def forward(self, transition: PPOTransition) -> Output:
         core = self._core_net(transition)
         pi_type = core.action_type.softmax(-2)
@@ -445,7 +447,7 @@ class PPONet(GameNet):
 
     def masked_softmax(self, action_logits: Tensor) -> Tensor:
         b, s, n, _, f = action_logits.shape
-        action_mask = self._core_net.action_mask[None, :, :, :, None].repeat(b, s, 1, 1, f)
+        action_mask = self._core_net.action_mask[None, :, :, :, None].repeat(b, s, 1, 1, f).to(action_logits.device)
         z = torch.exp(action_logits) * action_mask
         sum_z = TensorUtils.nn_sum(z, [2, 3])
         sum_z[sum_z == 0] = 1

@@ -41,7 +41,10 @@ class Trainer:
             sleep(1)
             return 0.
 
-        td_loss = self.train()
+        try:
+            td_loss = self.train()
+        except:
+            self.train()
 
         if self.tick_iter % SAVE_LATEST_NET_INTERVAL == 0:
             self.save('latest')
@@ -222,7 +225,7 @@ class PPOTrainer(Trainer):
         # if done.sum() > 0:
         #     breakpoint()
         b, t = value.shape
-        mask = (torch.arange(t)[None, :] >= transition.seq_lens.squeeze()[:, None]).to(self.net.on_device)
+        mask = (torch.arange(t)[None, :] >= transition.seq_lens[:, None].cpu()).to(self.net.on_device)
         mask = TensorUtils.pop_elements(mask, done)
 
         reward = transition.reward_pack.reward * self.reward_scale

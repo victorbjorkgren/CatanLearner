@@ -7,6 +7,7 @@ from Learner.Utility.ActionTypes import BaseAction, TradeAction, BuildAction, No
 
 class CatanActionSampler:
     def __init__(self, pi: Pi):
+        self.device = pi.map.device
         self.build_size = pi.map.shape[1]
         self.type_dist = Categorical(probs=pi.type)
         self.build_dist = Categorical(probs=pi.map.flatten())
@@ -52,10 +53,10 @@ class CatanActionSampler:
                             trade_gets[i, j] = action[i][j].get
 
 
-            type_log_p = self.type_dist.log_prob(action_ind)
-            build_log_p = self.logprob_2d_map(build_mat_index)
-            trade_give_log_p = self.trade_give_dist.log_prob(trade_gives)
-            trade_get_log_p = self.trade_get_dist.log_prob(trade_gets)
+            type_log_p = self.type_dist.log_prob(action_ind.to(self.device))
+            build_log_p = self.logprob_2d_map(build_mat_index.to(self.device))
+            trade_give_log_p = self.trade_give_dist.log_prob(trade_gives.to(self.device))
+            trade_get_log_p = self.trade_get_dist.log_prob(trade_gets.to(self.device))
 
             builds = action_ind==build_ind
             trades = action_ind==trade_ind

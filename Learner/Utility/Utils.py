@@ -557,11 +557,11 @@ class TensorUtils:
         # value_t_ = torch.zeros_like(value_t)
         # value_tp1_ = torch.zeros_like(value_t)
 
-        value_tp1_ = torch.zeros(b, t - 1)
-        value_tp1_[done, :] = torch.cat((value_t[done, 2:], torch.zeros(done.sum(), 1)), dim=1)
+        value_tp1_ = torch.zeros(b, t - 1, device=r_t.device)
+        value_tp1_[done, :] = torch.cat((value_t[done, 2:], torch.zeros(done.sum(), 1, device=r_t.device)), dim=1)
         value_tp1_[~done, :] = value_t[~done, 1:]
 
-        value_t_ = torch.zeros(b, t - 1)
+        value_t_ = torch.zeros(b, t - 1, device=r_t.device)
         value_t_[done, :] = value_t[done, 1:]
         value_t_[~done, :] = value_t[~done, :-1]
 
@@ -573,7 +573,7 @@ class TensorUtils:
 
         advantage_t = torch.zeros_like(delta_t, dtype=torch.float32)
 
-        gae_t = torch.zeros(b)
+        gae_t = torch.zeros(b, device=r_t.device)
         t = seq_lens.clone() - 2
         for _ in range(delta_t.shape[1]):
             seq_mask = t >= 0
