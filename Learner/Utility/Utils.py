@@ -58,7 +58,7 @@ class Holders:
     #     max_t = cls._list_max_t(obj_list)
     #     return cls.pad_t_dim(obj_list, max_t)
 
-    @classmethod
+    # @classmethod
     # def pad_t_dim(cls: Type[T], obj_list: List[T], max_t: int) -> List[T]:
     #     out_list = []
     #     for field_ in fields(obj_list[0]):
@@ -118,11 +118,11 @@ class Holders:
                     field_class = type(field_values[0])
                     result_tensors[field_name] = field_class.concat(field_values, dim, pad_dim, max_t)
             else:
-                # if 'not_stackable' in field_.metadata.keys():
-                #     result_tensors[field_name] = field_values
-                # else:
-                field_values = TensorUtils.pad_tensor_list(field_values)
-                result_tensors[field_name] = torch.cat(field_values, dim=dim)
+                if 'not_stackable' in field_.metadata.keys():
+                    result_tensors[field_name] = field_values
+                else:
+                    field_values = TensorUtils.pad_tensor_list(field_values)
+                    result_tensors[field_name] = torch.cat(field_values, dim=dim)
         return cls(**result_tensors)
 
     @classmethod
@@ -212,6 +212,17 @@ class Holders:
                 setattr(self, field_.name, val.squeeze(dim))
             elif isinstance(val, Holders):
                 val.squeeze(dim)
+            else:
+                raise TypeError(f'Unexpected type {type(val)}')
+        return self
+
+    def unsqueeze(self, dim):
+        for field_ in fields(self):
+            val = getattr(self, field_.name)
+            if isinstance(val, Tensor):
+                setattr(self, field_.name, val.unsqueeze(dim))
+            elif isinstance(val, Holders):
+                val.unsqueeze(dim)
             else:
                 raise TypeError(f'Unexpected type {type(val)}')
         return self
@@ -383,7 +394,7 @@ class TensorUtils:
         return connections
 
     @staticmethod
-    def sparse_misc_node(node_n, misc_n, to_undirected):
+    def sparse_game_node(node_n, misc_n, to_undirected):
         node_range = torch.arange(node_n + 1)
         sparse = torch.stack((torch.full_like(node_range, misc_n), node_range), dim=0)
         if to_undirected:

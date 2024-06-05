@@ -187,7 +187,7 @@ class InMemBuffer(PrioReplayBuffer):
         samples = {
             'inds': sample_inds,
             'weights': weights,
-            'transition': type(self.data[0]).stack([self.data[i] for i in sample_inds], pad_dim=0, dim=0)
+            'transition': type(self.data[0]).concat([self.data[i] for i in sample_inds], pad_dim=0, dim=0)
         }
         # for k, v in self.data.items():
         #     samples[k] = v[sample_inds]

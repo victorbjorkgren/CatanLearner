@@ -8,8 +8,10 @@ from Learner.Utility.Utils import Holders
 
 @dataclass
 class GameState(Holders):
-    state: Tensor
-
+    node_features: Tensor
+    edge_features: Tensor
+    face_features: Tensor
+    game_features: Tensor
 
 @dataclass
 class PPOActionPack(Holders):
@@ -37,7 +39,7 @@ class PPOTransition(Holders):
 
     @property
     def as_net_input(self):
-        state = self.state.state
+        state = self.state
         seq_lens = self.seq_lens
         lstm_h = self.action_pack.lstm_h.squeeze(2).permute(1, 0, 2)
         lstm_c = self.action_pack.lstm_c.squeeze(2).permute(1, 0, 2)
@@ -46,7 +48,7 @@ class PPOTransition(Holders):
 
 @dataclass
 class NetInput(Holders):
-    state: Tensor
+    state: GameState
     seq_lens: Tensor
     lstm_h: Tensor
     lstm_c: Tensor

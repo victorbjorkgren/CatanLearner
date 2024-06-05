@@ -8,7 +8,7 @@ import torch.nn as nn
 import torch.optim as optim
 
 from Learner.Utility.DataTypes import PPOTransition, NetInput
-from Learner.constants import PPO_ENTROPY_COEF, PPO_VALUE_COEF
+from Learner.constants import PPO_ENTROPY_COEF, PPO_VALUE_COEF, SAVE_LATEST_NET_INTERVAL, SAVE_CHECKPOINT_NET_INTERVAL
 from Learner.Utility.CustomDistributions import CatanActionSampler
 from Learner.Loss import Loss
 from Learner.Nets import GameNet, PPONet
@@ -43,9 +43,9 @@ class Trainer:
 
         td_loss = self.train()
 
-        if self.tick_iter % 10 == 0:
+        if self.tick_iter % SAVE_LATEST_NET_INTERVAL == 0:
             self.save('latest')
-        if self.tick_iter % 100 == 0:
+        if self.tick_iter % SAVE_CHECKPOINT_NET_INTERVAL == 0:
             self.save('checkpoint')
 
         self.tick_iter += 1

@@ -115,15 +115,17 @@ def actor_loop():
     for i in iterator:
         if stop_event.is_set():
             return
-        observation, obs_player = actor_net_list[0].get_dense(game)
-        action = game.current_agent.sample_action(observation, i_am_player=game.current_player)
+        observation = game.extract_attributes()
+        current_player = game.current_player
+        action = game.current_agent.sample_action(observation, i_am_player=current_player)
         reward, done, succeeded = game.step(action)
-        game.player_agents[obs_player].update_reward(reward, done, game, obs_player)
-        game.player_agents[obs_player].signal_failure(not succeeded)
+        game.player_agents[current_player].update_reward(reward, done, game, current_player)
+        # game.player_agents[current_player].signal_failure(not succeeded)
 
         # On episode termination
         if done:
-            # game.render(training_img=True)
+            if i % 10 == 0:
+                game.render(training_img=True)
             agent_tracker.update_elo()
             titan = agent_tracker.get_titan()
             # print(titan.episode_actions)
@@ -162,13 +164,31 @@ def graceful_shutdown():
     actor_thread.join()
 
 
+def learner_worker():
+    try:
+        learner_loop()
+    except Exception as e:
+        print('EXCEPTION IN LEARNER LOOP: ', e)
+    finally:
+        stop_event.set()
+
+
+def actor_worker():
+    try:
+        actor_loop()
+    except Exception as e:
+        print('EXCEPTION IN ACTOR LOOP: ', e)
+    finally:
+        stop_event.set()
+
+
 td_loss_hist = deque(maxlen=HISTORY_DISPLAY)
 
 stop_event = threading.Event()
 
 try:
-    learner_thread = threading.Thread(target=learner_loop)
-    actor_thread = threading.Thread(target=actor_loop)
+    learner_thread = threading.Thread(target=learner_worker)
+    actor_thread = threading.Thread(target=actor_worker)
 
     learner_thread.start()
     actor_thread.start()

@@ -12,6 +12,7 @@ from torch_geometric.utils.convert import to_networkx
 
 from Learner.Agents import BaseAgent
 from Learner.Utility.ActionTypes import BaseAction, BuildAction, TradeAction, NoopAction
+from Learner.Utility.DataTypes import GameState
 from .Board import Board
 from .Player import Player
 from .constants import *
@@ -43,6 +44,33 @@ class Game:
     @property
     def current_agent(self):
         return self.players[self.current_player].agent
+
+    def get_game_attr(self):
+        return T.cat([player.state.clone()[None, :] for player in self.players], dim=1).float()
+
+    @property
+    def num_game_attr(self):
+        return self.get_game_attr().shape[1]
+
+    def extract_attributes(self):
+        node_x = self.board.state.x.clone()
+        edge_x = self.board.state.edge_attr.clone()
+        face_x = self.board.state.face_attr.clone()
+        game_x = self.get_game_attr()
+
+        for i in range(self.n_players):
+            road_mask = self.board.sparse_road_mask(i, self.players[i].hand, self.first_turn, self.first_turn_village_switch)
+            village_mask = self.board.sparse_village_mask(i, self.players[i].hand, self.first_turn, self.first_turn_village_switch)
+
+            node_x = torch.cat((node_x, torch.zeros((N_NODES, 1))), dim=1)
+            edge_x = torch.cat((edge_x, torch.zeros((N_ROADS * 2, 1))), dim=1)
+
+            node_x[village_mask, -1] = 1
+            edge_x[road_mask, -1] = 1
+        # node_x = T.cat((node_x, player_states.repeat((node_x.shape[0], 1))), dim=1)
+        # edge_x = T.cat((edge_x, player_states.repeat((edge_x.shape[0], 1))), dim=1)
+
+        return GameState(node_x[None, None, ...], edge_x[None, None, ...], face_x[None, None, ...], game_x[None, None, ...])
 
     def reset(self):
         self.turn = 0

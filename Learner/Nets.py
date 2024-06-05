@@ -13,10 +13,10 @@ from torch import Tensor
 from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 
 from Environment import Game
-from Environment.constants import N_RESOURCES, N_ACTION_TYPES
+from Environment.constants import N_RESOURCES, N_ACTION_TYPES, N_GRAPH_NODES, N_NODES
 from Learner.Utility.ActionTypes import TradeAction, Pi
-from Learner.Utility.DataTypes import PPOTransition, NetInput
-from Learner.Utility.Utils import TensorUtils
+from Learner.Utility.DataTypes import PPOTransition, NetInput, GameState
+from Learner.Utility.Utils import TensorUtils, Holders
 from Learner.Layers import MLP, PowerfulLayer, MultiHeadAttention
 
 file_lock = threading.Lock()
@@ -86,7 +86,8 @@ class CoreNet(BaseNet):
         n_node_attr = game.board.state.num_node_features
         n_edge_attr = game.board.state.num_node_features
         n_face_attr = game.board.state.face_attr.shape[1]
-        n_player_attr = game.players[0].state.shape[0]
+        n_game_attr = game.num_game_attr
+        # n_player_attr = game.players[0].state.shape[0]
         self.n_players = len(game.players)
 
         self.on_device = net_config['on_device']
@@ -95,22 +96,25 @@ class CoreNet(BaseNet):
         self.undirected_faces = undirected_faces
         self.sparse_edge = sparse_edge
         self.sparse_face = TensorUtils.sparse_face_matrix(sparse_face, to_undirected=self.undirected_faces)
-        self.sparse_pass_node = TensorUtils.sparse_misc_node(
+        self.sparse_game_node = TensorUtils.sparse_game_node(
             sparse_edge.max(),
             self.sparse_face.max() + 1,
             to_undirected=True
         )
-        self.sparse_full = T.cat((self.sparse_edge, self.sparse_face, self.sparse_pass_node), dim=1)
+        self.sparse_full = T.cat((self.sparse_edge, self.sparse_face, self.sparse_game_node), dim=1)
 
-        # TODO: Remove Magic Numbers
-        self.node_adj = T.eye(74, dtype=T.long).unsqueeze(0)
-        self.node_adj[:, 54:, 54:] = 0
-        self.node_adj[:, -1, -1] = 1
-        self.edge_adj = pyg.utils.to_dense_adj(self.sparse_edge, max_num_nodes=74)
-        self.face_adj = pyg.utils.to_dense_adj(self.sparse_face, max_num_nodes=74)
-        self.face_adj = self.face_adj + T.eye(self.face_adj.shape[-1])
-        self.face_adj[self.node_adj > 0] = 0
-        self.face_adj[:, -1, -1] = 0
+        self.node_adj = T.eye(N_GRAPH_NODES, dtype=T.long).unsqueeze(0)
+        self.node_adj[:, N_NODES:, N_NODES:] = 0
+        self.edge_adj = pyg.utils.to_dense_adj(self.sparse_edge, max_num_nodes=N_GRAPH_NODES)
+        self.face_node_adj = T.eye(N_GRAPH_NODES, dtype=T.long).unsqueeze(0)
+        self.face_node_adj[self.node_adj > 0] = 0
+        self.face_node_adj[:, -1, -1] = 0
+        self.face_adj = pyg.utils.to_dense_adj(self.sparse_face, max_num_nodes=N_GRAPH_NODES)
+        self.face_adj = self.face_adj + self.face_node_adj
+        self.game_node_adj = T.zeros_like(self.node_adj, dtype=T.long)
+        self.game_node_adj[:, -1, -1] = 1
+        self.game_adj = pyg.utils.to_dense_adj(self.sparse_game_node, max_num_nodes=N_GRAPH_NODES)
+        self.game_adj = self.game_adj + self.game_node_adj
         self.full_adj = pyg.utils.to_dense_adj(self.sparse_full)
         self.full_adj = self.full_adj + T.eye(self.full_adj.shape[-1])
         self.full_mask = self.full_adj > 0
@@ -121,7 +125,8 @@ class CoreNet(BaseNet):
             (self.state_matrix.shape[0], self.state_matrix.shape[1], self.state_matrix.shape[2], self.n_output))
         self.node_mask = self.node_adj > 0
         self.edge_mask = self.edge_adj > 0
-        self.face_mask = self.face_adj > 0
+        self.face_mask = self.face_node_adj > 0
+        self.game_mask = self.game_node_adj > 0
         self.action_mask = (self.node_adj > 0) | (self.edge_adj > 0)
         self.action_mask[:, -1, -1] = True
 
@@ -130,15 +135,17 @@ class CoreNet(BaseNet):
         self.node_mask = self.node_mask.view((1, -1)).squeeze()
         self.edge_mask = self.edge_mask.view((1, -1)).squeeze()
         self.face_mask = self.face_mask.view((1, -1)).squeeze()
+        self.game_mask = self.game_mask.view((1, -1)).squeeze()
         self.full_mask = self.full_mask.view((1, -1)).squeeze()
 
         self.face_adj_norm = TensorUtils.preprocess_adj(self.face_adj, batch_size, add_self_loops=False)
         self.edge_adj_norm = TensorUtils.preprocess_adj(self.edge_adj, batch_size, add_self_loops=False)
         self.full_adj_norm = TensorUtils.preprocess_adj(self.full_adj, batch_size, add_self_loops=False)
 
-        self.node_embed = MLP(n_node_attr + self.n_players * n_player_attr + 2, n_embed, residual=False)
-        self.edge_embed = MLP(n_edge_attr + self.n_players * n_player_attr + 2, n_embed, residual=False)
+        self.node_embed = MLP(self.n_players * 2, n_embed, residual=False)
+        self.edge_embed = MLP(self.n_players * 2, n_embed, residual=False)
         self.face_embed = MLP(n_face_attr, n_embed, residual=False)
+        self.game_embed = MLP(n_game_attr, n_embed, residual=False)
 
         self.action_value = MLP(n_embed, n_output, activated_out=True)
         self.state_value = MLP(n_embed, n_output, activated_out=True)
@@ -163,13 +170,13 @@ class CoreNet(BaseNet):
         self.full_mask = self.full_mask.to(self.on_device)
         self.out_matrix = self.out_matrix.to(self.on_device)
 
-    def forward(self, transition: NetInput) -> Output:
-        observation = transition.state
-        seq_lengths = transition.seq_lens
-        h_in = transition.lstm_h[:1, :, :]
-        c_in = transition.lstm_c[:1, :, :]
-        assert len(observation.shape) == 5, "QNet wants [B, T, N, N, F]"
-        b, t, n, _, f = observation.shape
+    def forward(self, core_input: NetInput) -> Output:
+        observation = core_input.state
+        seq_lengths = core_input.seq_lens
+        h_in = core_input.lstm_h[:1, :, :]
+        c_in = core_input.lstm_c[:1, :, :]
+        # assert len(observation.shape) == 5, "QNet wants [B, T, N, N, F]"
+        b, t = observation.node_features.shape[:2]
 
         obs_matrix = observation.to(self.on_device)
         h_in = h_in.to(self.on_device)
@@ -194,17 +201,22 @@ class CoreNet(BaseNet):
         # ['action_type', 'action_matrix', 'state_matrix', 'action_trade' 'state_trade', 'hn', 'cn']
         return self.Output(action_type, action_matrix, action_trade, state_value, hn, cn)
 
-    def feature_embedding(self, observation):
-        batch, seq, n, _, f = observation.shape
+    def feature_embedding(self, observation: GameState):
+        b, t = observation.node_features.shape[:2]
 
-        x_flat = observation.view(batch * seq, n * n, f)
-        obs_matrix = T.zeros((batch * seq, n * n, self.n_embed), dtype=T.float).to(self.on_device)
+        # x_flat = observation.view(batch * seq, n * n, f)
+        obs_matrix = T.zeros((b, t, N_GRAPH_NODES * N_GRAPH_NODES, self.n_embed), dtype=T.float).to(self.on_device)
 
-        obs_matrix[:, self.node_mask] = self.node_embed(x_flat[:, self.node_mask])
-        obs_matrix[:, self.edge_mask] = self.edge_embed(x_flat[:, self.edge_mask])
-        obs_matrix[:, self.face_mask] = self.face_embed(x_flat[:, self.face_mask, :6])
+        # obs_matrix[:, self.node_mask] = self.node_embed(x_flat[:, self.node_mask])
+        # obs_matrix[:, self.edge_mask] = self.edge_embed(x_flat[:, self.edge_mask])
+        # obs_matrix[:, self.face_mask] = self.face_embed(x_flat[:, self.face_mask, :6])
 
-        obs_matrix = obs_matrix.reshape(batch, seq, n, n, self.n_embed)
+        obs_matrix[:, :, self.node_mask] = self.node_embed(observation.node_features)
+        obs_matrix[:, :, self.edge_mask] = self.edge_embed(observation.edge_features)
+        obs_matrix[:, :, self.face_mask] = self.face_embed(observation.face_features)
+        obs_matrix[:, :, self.game_mask] = self.game_embed(observation.game_features)
+
+        obs_matrix = obs_matrix.reshape(b, t, N_GRAPH_NODES, N_GRAPH_NODES, self.n_embed)
 
         return obs_matrix
 
@@ -256,55 +268,57 @@ class CoreNet(BaseNet):
 
         return obs_matrix, hn, cn
 
-    def get_dense(self, game: Game) -> Tuple[T.Tensor, int]:
-        node_x, edge_x, face_x = self.extract_attr(game)
-        p0_mask = self.mask_util(game, 0).long()  # .squeeze()
-        p1_mask = self.mask_util(game, 1).long()  # .squeeze()
-        mask = T.zeros(1, 74, 74, 2)
-        mask[:, p0_mask[0, :], p0_mask[1, :], 0] = 1
-        mask[:, p1_mask[0, :], p1_mask[1, :], 1] = 1
-        mask[:, -1, -1, :] = game.can_no_op()
+    # def get_dense(self, game: Game) -> Tuple[T.Tensor, int]:
+    #     node_x, edge_x, face_x = self.extract_attr(game)
+    #     # p0_mask = self.mask_util(game, 0).long()  # .squeeze()
+    #     # p1_mask = self.mask_util(game, 1).long()  # .squeeze()
+    #     mask = T.zeros(1, N_GRAPH_NODES, N_GRAPH_NODES, game.n_players)
+    #     for i in range(game.n_players):
+    #         p_mask = self.mask_util(game, i).long()
+    #         mask[:, p_mask[0, :], p_mask[1, :], i] = 1
+    #
+    #     # mask[:, p1_mask[0, :], p1_mask[1, :], 1] = 1
+    #     mask[:, -1, -1, :] = game.can_no_op()
+    #
+    #     # Normalize-ish
+    #     node_x = node_x.log()
+    #     edge_x = edge_x.log()
+    #     face_x = face_x.log()
+    #
+    #     pass_x = T.zeros_like(node_x)
+    #     # face_x = T.cat((face_x, T.zeros(19, 8)), dim=1)
+    #     node_x = T.cat((node_x, face_x, T.zeros((1, 7*game.n_players))))
+    #     node_matrix = T.diag_embed(node_x.permute(1, 0)).permute(1, 2, 0).unsqueeze(0)
+    #     face_x = face_x.repeat_interleave(6, 0)
+    #     if self.undirected_faces:
+    #         face_x = T.cat((face_x, face_x.flip(0)), dim=0)
+    #     connection_x = T.cat((edge_x, face_x, pass_x, pass_x))
+    #     connection_matrix = pyg.utils.to_dense_adj(self.sparse_full, edge_attr=connection_x)
+    #
+    #     full_matrix = node_matrix + connection_matrix
+    #     full_matrix = T.cat((full_matrix, mask), dim=-1)
+    #     return full_matrix, game.current_player
 
-        # Normalize-ish
-        node_x /= 10
-        edge_x /= 10
-        face_x /= 12
+    # @staticmethod
+    # def extract_attr(game: Game):
+    #     node_x = game.board.state.x.clone()
+    #     edge_x = game.board.state.edge_attr.clone()
+    #     face_x = game.board.state.face_attr.clone()
+    #
+    #     player_states = T.cat([ps.state.clone()[None, :] for ps in game.players], dim=1)
+    #     node_x = T.cat((node_x, player_states.repeat((node_x.shape[0], 1))), dim=1)
+    #     edge_x = T.cat((edge_x, player_states.repeat((edge_x.shape[0], 1))), dim=1)
+    #
+    #     return GameState(node_x, edge_x, face_x)
 
-        pass_x = T.zeros_like(node_x)
-        # TODO: Make board size and n_player invariant
-        face_x = T.cat((face_x, T.zeros(19, 8)), dim=1)
-        node_x = T.cat((node_x, face_x, T.zeros((1, 14))))
-        node_matrix = T.diag_embed(node_x.permute(1, 0)).permute(1, 2, 0).unsqueeze(0)
-        face_x = face_x.repeat_interleave(6, 0)
-        if self.undirected_faces:
-            face_x = T.cat((face_x, face_x.flip(0)), dim=0)
-        connection_x = T.cat((edge_x, face_x, pass_x, pass_x))
-        connection_matrix = pyg.utils.to_dense_adj(self.sparse_full, edge_attr=connection_x)
-
-        full_matrix = node_matrix + connection_matrix
-        full_matrix = T.cat((full_matrix, mask), dim=-1)
-        return full_matrix, game.current_player
-
-    @staticmethod
-    def extract_attr(game: Game):
-        node_x = game.board.state.x.clone()
-        edge_x = game.board.state.edge_attr.clone()
-        face_x = game.board.state.face_attr.clone()
-
-        player_states = T.cat([ps.state.clone()[None, :] for ps in game.players], dim=1)
-        node_x = T.cat((node_x, player_states.repeat((node_x.shape[0], 1))), dim=1)
-        edge_x = T.cat((edge_x, player_states.repeat((edge_x.shape[0], 1))), dim=1)
-
-        return node_x, edge_x, face_x
-
-    @staticmethod
-    def mask_util(game: Game, player) -> T.Tensor:
-        # road_mask, village_mask = get_dense_masks(game, player)
-        road_mask = game.board.sparse_road_mask(player, game.players[player].hand, game.first_turn and not game.first_turn_village_switch)
-        village_mask = game.board.sparse_village_mask(player, game.players[player].hand, game.first_turn and game.first_turn_village_switch)
-
-        mask = T.cat((road_mask, village_mask.repeat(2, 1)), dim=1)
-        return mask
+    # @staticmethod
+    # def mask_util(game: Game, player) -> T.Tensor:
+    #     # road_mask, village_mask = get_dense_masks(game, player)
+    #     road_mask = game.board.sparse_road_mask(player, game.players[player].hand, game.first_turn and not game.first_turn_village_switch)
+    #     village_mask = game.board.sparse_village_mask(player, game.players[player].hand, game.first_turn and game.first_turn_village_switch)
+    #
+    #     mask = T.cat((road_mask, village_mask.repeat(2, 1)), dim=1)
+    #     return mask
 
 class PlayerNet(BaseNet):
     def __init__(self, in_features, out_features, n_embed, n_heads):
@@ -363,12 +377,12 @@ class GameNet(BaseNet):
     def get_dense(self, game):
         return self._core_net.get_dense(game)
 
+    def extract_attributes(self, game):
+        return self._core_net.extract_attr(game)
+
     @abstractmethod
     def forward(self,
-                observation: T.Tensor,
-                seq_lengths: T.Tensor,
-                h_in: T.Tensor,
-                c_in: T.Tensor
+                transition: Holders
                 ) -> Tuple[T.Tensor, T.Tensor, T.Tensor, T.Tensor]:
 
         raise NotImplementedError
@@ -447,7 +461,7 @@ class PPONet(GameNet):
         if isinstance(i_am_player, Tensor):
             i_am_player = i_am_player.unsqueeze(-1)
             pi_type = torch.gather(net_out.pi_type, -1, i_am_player.expand(-1, -1, 3, -1)).squeeze(-1)
-            pi_map = torch.gather(net_out.pi_map, -1, i_am_player.unsqueeze(-1).expand(-1, -1, 74, 74, -1)).squeeze(-1)
+            pi_map = torch.gather(net_out.pi_map, -1, i_am_player.unsqueeze(-1).expand(-1, -1, N_GRAPH_NODES, N_GRAPH_NODES, -1)).squeeze(-1)
             pi_trade = TradeAction(
                 give=torch.gather(net_out.pi_trade.give, -1, i_am_player.expand(-1, -1, 5, -1)).squeeze(-1),
                 get=torch.gather(net_out.pi_trade.get, -1, i_am_player.expand(-1, -1, 5, -1)).squeeze(-1),
@@ -458,7 +472,7 @@ class PPONet(GameNet):
                 give=net_out.pi_trade.give[0, 0, :, i_am_player],
                 get=net_out.pi_trade.get[0, 0, :, i_am_player]
             )
-            pi_map = net_out.pi_map[0, 0, :54, :54, i_am_player]
+            pi_map = net_out.pi_map[0, 0, :N_NODES, :N_NODES, i_am_player]
         else:
             raise TypeError
         return Pi(type=pi_type, trade=pi_trade, map=pi_map)

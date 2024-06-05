@@ -5,6 +5,7 @@ import torch
 import torch as T
 
 from Environment import Game
+from Environment.constants import N_NODES
 from Learner.Agents.BaseAgent import BaseAgent
 from Learner.Utility.ActionTypes import BaseAction, TradeAction, type_mapping, NoopAction, BuildAction
 from Learner.Utility.CustomDistributions import CatanActionSampler
@@ -39,30 +40,34 @@ class PPOAgent(BaseAgent):
         self.h0 = T.zeros((1, 1, 32), dtype=T.float)
         self.c0 = T.zeros((1, 1, 32), dtype=T.float)
 
-    def sample_action(self, state: T.Tensor, i_am_player: int) -> BaseAction:
-        state_key = TensorUtils.get_cache_key(state)
+    def sample_action(self, state: GameState, i_am_player: int) -> BaseAction:
+        # state_key = TensorUtils.get_cache_key(state)
 
         if self.my_name in ['Titan', 'latest']:
-            self.game_state_buffer.append(GameState(state))
+            self.game_state_buffer.append(state)
 
         ht, ct = self.h0, self.c0
 
         # Get masks
-        build_mask = ~state[0, :54, :54, -N_PLAYERS+i_am_player].bool()
-        tradeable = self.game.can_trade(i_am_player, 4)
-        trade_mask = ~T.isin(T.arange(5), tradeable)
+        buildable = self.get_build_mask(i_am_player)
+        build_mask = torch.zeros((N_NODES, N_NODES))
+        build_mask[buildable[0, :], buildable[1, :]] = 1
+        # build_mask = ~state[0, :54, :54, -N_PLAYERS+i_am_player].bool()
+        tradable = self.game.can_trade(i_am_player, 4)
+        trade_mask = T.isin(T.arange(5), tradable)
         no_op_mask = self.game.can_no_op()
 
         with T.no_grad():
             net_out: PPONet.Output = self.net(
-                NetInput(state.unsqueeze(1), T.Tensor([1]), self.h0, self.c0)
+                NetInput(state, T.Tensor([1]), self.h0, self.c0)
             )
             self.h0, self.c0 = net_out.hn, net_out.cn
 
         pi = self.net.get_pi(net_out, i_am_player)
 
-        pi.map[build_mask] = 0
-        pi.trade.give[trade_mask] = 0
+        # Apply masks
+        pi.map *= build_mask
+        pi.trade.give *= trade_mask
         pi.type[type_mapping.inverse[NoopAction]] *= no_op_mask
 
         if pi.trade.give.nonzero().numel() == 0:
@@ -77,17 +82,19 @@ class PPOAgent(BaseAgent):
 
         sampler = CatanActionSampler(pi)
         action = sampler.sample()
-        # if isinstance(action, BuildAction):
-        #     try:
-        #         self.game.decode_build_action(action)
-        #     except:
-        #         breakpoint()
-        logprob = sampler.log_prob(action).unsqueeze(0)
-        value = net_out.state_value[0, 0, i_am_player].unsqueeze(0)
+        logprob = sampler.log_prob(action).unsqueeze(0).unsqueeze(0)
+        value = net_out.state_value[:1, :1, i_am_player]
 
         if self.my_name in ['Titan', 'latest']:
             self.action_pack_buffer.append(PPOActionPack(action, logprob, value, ht, ct))
         return action
+
+    def get_build_mask(self, player) -> T.Tensor:
+        road_mask = self.game.board.sparse_road_mask(player, self.game.players[player].hand, self.game.first_turn, self.game.first_turn_village_switch)
+        village_mask = self.game.board.sparse_village_mask(player, self.game.players[player].hand, self.game.first_turn, self.game.first_turn_village_switch)
+
+        mask = T.cat((road_mask, village_mask.repeat(2, 1)), dim=1)
+        return mask
 
     def signal_episode_done(self, i_am_player: int) -> None:
         super().signal_episode_done(i_am_player)
@@ -108,10 +115,10 @@ class PPOAgent(BaseAgent):
         time_to_flush = self.ticks_since_flush > 0
         if (has_length & time_to_flush) | done:
             transition = PPOTransition(
-                state=GameState.concat(self.game_state_buffer, dim=0),
+                state=GameState.concat(self.game_state_buffer, dim=1),
                 seq_lens=torch.tensor([len(self.reward_buffer)]),
-                action_pack=PPOActionPack.concat(self.action_pack_buffer, dim=0),
-                reward_pack=PPORewardPack.stack(self.reward_buffer, dim=0)
+                action_pack=PPOActionPack.concat(self.action_pack_buffer, dim=1),
+                reward_pack=PPORewardPack.concat(self.reward_buffer, dim=1)
             )
             self.buffer.add(transition)
             expected_length = self.max_seq_length - self.burn_in_length
@@ -123,10 +130,10 @@ class PPOAgent(BaseAgent):
         if self.my_name not in ['Titan', 'latest']:
             return
         rew_pack = PPORewardPack(
-            T.tensor([reward]),
-            T.tensor([game.episode]),
-            T.tensor([done]),
-            T.tensor([i_am_player])
+            T.tensor([[[reward]]]),
+            T.tensor([[[game.episode]]]),
+            T.tensor([[[done]]]),
+            T.tensor([[[i_am_player]]])
         )
         self.reward_buffer.append(rew_pack)
         self.ticks_since_flush += 1

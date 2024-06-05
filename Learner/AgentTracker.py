@@ -81,7 +81,7 @@ class AgentTracker:
                     champions.append(r.choice(self.contestants))
 
         else:
-            champions = self.match_making(len(self.agent_list))
+            champions = self.match_making(len(self.agent_list) - 1)
 
         # epsilons = r.choices(
         #     [0., r.uniform(self.eps_min, self.eps_max), 1.],
@@ -176,8 +176,8 @@ class AgentTracker:
         """
         assert self.checkpoint_elo is not None
         # assert self.best_elo > 0
-
-        elo_differences = np.array([self.best_elo - elo for elo in self.checkpoint_elo.values()])
+        titan_elo = self.checkpoint_elo['latest']
+        elo_differences = np.array([titan_elo - elo for elo in self.checkpoint_elo.values()])
         weights = self.gaussian_pdf(elo_differences, mu=0, sigma=sigma)
         normalized_weights = weights / np.sum(weights)
         return normalized_weights
@@ -196,9 +196,11 @@ class AgentTracker:
         """
         assert self.checkpoint_elo is not None
 
+        players = ['latest']
+
         weights = self.calculate_weights(sigma)
-        selected_checkpoints = r.choices(list(self.checkpoint_elo.keys()), weights=weights, k=k)
-        return selected_checkpoints
+        selected_opponents = r.choices(list(self.checkpoint_elo.keys()), weights=weights, k=k)
+        return players + selected_opponents
 
     def save_elo(self):
         with open('./CheckPointELO.pkl', 'wb') as f:
