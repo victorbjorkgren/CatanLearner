@@ -124,7 +124,7 @@ def actor_loop():
 
         # On episode termination
         if done:
-            if i % 10 == 0:
+            if game.episode % 1 == 0:
                 game.render(training_img=True)
             agent_tracker.update_elo()
             titan = agent_tracker.get_titan()

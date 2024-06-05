@@ -32,6 +32,8 @@ class Game:
         self.board: Optional[Board] = None
         self.turn: Optional[int] = None
         self.idle_turns: Optional[int] = None
+        self.build_cmap: List[str] = None
+        self.dark_cmap: List[str] = None
 
         # Placeholder inits
         self.board = Board(self.n_players)
@@ -305,10 +307,30 @@ class Game:
             for listener in self.listeners[event_type]:
                 listener(data)
 
+    def init_cmap(self, n, value_factor=.5):
+        # Generate n distinct colors using matplotlib's built-in function
+        colors = plt.cm.get_cmap('hsv', n)
+
+        # Convert these colors to hex format and generate a darker version
+        hex_colors = []
+        darker_hex_colors = []
+        for i in range(n):
+            rgb = colors(i)[:3]  # Get the RGB values
+            hex_color = '#%02x%02x%02x' % tuple(int(c * 255) for c in rgb)
+            hex_colors.append(hex_color)
+
+            # Generate a darker version by reducing the value
+            darker_rgb = tuple(c * value_factor for c in rgb)
+            darker_hex_color = '#%02x%02x%02x' % tuple(int(c * 255) for c in darker_rgb)
+            darker_hex_colors.append(darker_hex_color)
+
+        self.build_cmap = hex_colors
+        self.dark_cmap = darker_hex_colors
+
     def render(self, training_img=False, debug=False):
-        if self.n_players != 2:
-            print("Rendering not implemented for more than two players.")
-            return
+        if self.build_cmap is None:
+            self.init_cmap(self.n_players)
+
         plt.figure(figsize=(FIG_X, FIG_Y))
         plt.axis('off')  # Hide axes
         plt.axis('equal')
@@ -318,30 +340,22 @@ class Game:
         ###
         # Make node colors
         ###
-        node_colors = [''] * self.board.state.num_nodes
+        node_colors = ['#FBFADA'] * self.board.state.num_nodes  # neutral beige
         for i in range(self.board.state.num_nodes):
-            if self.board.state.x[i][0] == 1:
-                node_colors[i] = '#ADBC9F'  # light green
-            elif self.board.state.x[i][0] == 2:
-                node_colors[i] = '#436850'  # dark green
-            elif self.board.state.x[i][1] == 1:
-                node_colors[i] = '#7FC7D9'  # light blue
-            elif self.board.state.x[i][1] == 2:
-                node_colors[i] = '#365486'  # dark blue
-            else:
-                node_colors[i] = '#FBFADA'  # neutral beige
+            for j in range(self.n_players):
+                if self.board.state.x[i][j] == 1:
+                    node_colors[i] = self.build_cmap[j]
+                elif self.board.state.x[i][j] == 2:
+                    node_colors[i] = self.dark_cmap[j]
 
         ###
         # Make edge weights
         ###
-        edge_colors = [''] * self.board.state.num_edges
+        edge_colors = ['#FBFADA'] * self.board.state.num_edges  # neutral beige
         for i in range(self.board.state.num_edges):
-            if self.board.state.edge_attr[i][0] == 1:
-                edge_colors[i] = '#265073'  # very deep green
-            elif self.board.state.edge_attr[i][1] == 1:
-                edge_colors[i] = '#D9917F'  # redish
-            else:
-                edge_colors[i] = '#ADC7C4'  # light teal
+            for j in range(self.n_players):
+                if self.board.state.edge_attr[i][0] == 1:
+                    edge_colors[i] = self.build_cmap[j]
 
         ###
         # Draw text on faces
@@ -366,8 +380,6 @@ class Game:
         ###
         # Player state texts
         ###
-        text_top_right = "Player 1:\n" + str(self.players[0])
-        text_bottom_right = "Player 2:\n" + str(self.players[1])
         text_top_left = f"Turn {int(self.turn + 1)} - {int(turn_appendix + 1)}"
 
         # Margins from the edges of the figure
@@ -375,15 +387,19 @@ class Game:
         margin_y = 0.02  # Y margin as a fraction of total height
 
         # Calculate positions based on figure dimensions and margins
-        bottom_left_pos = (margin_x * FIG_X, margin_y * FIG_Y)
-        top_right_pos = ((1 - margin_x) * FIG_X, (1 - margin_y) * FIG_Y)
-        bottom_right_pos = ((1 - margin_x) * FIG_X, margin_y * FIG_Y)
         top_left_pos = (margin_x * FIG_X, (1 - margin_y) * FIG_Y)
 
-        # Adding custom text at specified positions
-        # plt.text(bottom_left_pos[0], bottom_left_pos[1], text_bottom_left, ha='left', va='bottom')
-        plt.text(top_right_pos[0], top_right_pos[1], text_top_right, ha='right', va='top')
-        plt.text(bottom_right_pos[0], bottom_right_pos[1], text_bottom_right, ha='right', va='bottom')
+        # Adding custom text
+        texts = [f"Player {i_}:\n" + str(self.players[i_]) for i_ in range(self.n_players)]
+
+        # Position each text box
+        y_pos = (1 - margin_y) * FIG_Y
+        w = (FIG_Y - (self.n_players + 1) * margin_y) / self.n_players
+        for i_, text_ in enumerate(texts):
+            plt.text((1 - margin_x) * FIG_X, y_pos, text_, wrap=True, ha='right', va='top', fontsize=12,
+                    bbox=dict(facecolor='white', edgecolor=self.build_cmap[i_], boxstyle='round,pad=0.5'))
+            y_pos -= (w + margin_y)
+
         plt.text(top_left_pos[0], top_left_pos[1], text_top_left, ha='left', va='top')
 
         ###
@@ -400,7 +416,7 @@ class Game:
         ###
         if training_img:
             folder = f"./Renders/Training/"
-            filename = f"Ep {self.episode}-{int(self.turn)} -- {self.player_agents[0]} vs {self.player_agents[1]}.png"
+            filename = f"Ep {self.episode}-{int(self.turn)} -- Players : {str.join(', ', [str(a) for a in self.player_agents])}.png"
         else:
             folder = f"./Renders/Test/Episode {int(self.episode)}/"
             filename = f"Turn {int(self.turn)}_{turn_appendix}.png"
