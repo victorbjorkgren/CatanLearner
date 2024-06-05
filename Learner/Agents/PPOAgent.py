@@ -115,10 +115,10 @@ class PPOAgent(BaseAgent):
         time_to_flush = self.ticks_since_flush > 0
         if (has_length & time_to_flush) | done:
             transition = PPOTransition(
-                state=GameState.concat(self.game_state_buffer, dim=1),
+                state=GameState.concat(list(self.game_state_buffer), dim=1),
                 seq_lens=torch.tensor([len(self.reward_buffer)]),
-                action_pack=PPOActionPack.concat(self.action_pack_buffer, dim=1),
-                reward_pack=PPORewardPack.concat(self.reward_buffer, dim=1)
+                action_pack=PPOActionPack.concat(list(self.action_pack_buffer), dim=1),
+                reward_pack=PPORewardPack.concat(list(self.reward_buffer), dim=1)
             )
             self.buffer.add(transition)
             expected_length = self.max_seq_length - self.burn_in_length
@@ -130,13 +130,13 @@ class PPOAgent(BaseAgent):
         if self.my_name not in ['Titan', 'latest']:
             return
         rew_pack = PPORewardPack(
-            T.tensor([[[reward]]]),
-            T.tensor([[[game.episode]]]),
-            T.tensor([[[done]]]),
-            T.tensor([[[i_am_player]]])
+            T.tensor([[reward]]),
+            T.tensor([[game.episode]]),
+            T.tensor([[done]]),
+            T.tensor([[i_am_player]])
         )
         self.reward_buffer.append(rew_pack)
         self.ticks_since_flush += 1
-        if not done:
-            self._flush_buffer(False, i_am_player, force=False)
+
+        self._flush_buffer(done, i_am_player, force=False)
 

@@ -459,7 +459,7 @@ class PPONet(GameNet):
     @staticmethod
     def get_pi(net_out: Output, i_am_player: Tensor | int):
         if isinstance(i_am_player, Tensor):
-            i_am_player = i_am_player.unsqueeze(-1)
+            i_am_player = i_am_player.unsqueeze(-1).unsqueeze(-1)
             pi_type = torch.gather(net_out.pi_type, -1, i_am_player.expand(-1, -1, 3, -1)).squeeze(-1)
             pi_map = torch.gather(net_out.pi_map, -1, i_am_player.unsqueeze(-1).expand(-1, -1, N_GRAPH_NODES, N_GRAPH_NODES, -1)).squeeze(-1)
             pi_trade = TradeAction(

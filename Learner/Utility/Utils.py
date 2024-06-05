@@ -379,6 +379,24 @@ class Transition:
 
 class TensorUtils:
     @staticmethod
+    def pop_elements(data_tensor, bool_tensor):
+        # Initialize new tensor for storing the results
+        result = []
+
+        # Iterate through each row
+        for i in range(data_tensor.shape[0]):
+            if bool_tensor[i]:
+                # Pop from the left
+                result.append(data_tensor[i, 1:])
+            else:
+                # Pop from the right
+                result.append(data_tensor[i, :-1])
+
+        # Stack the results to maintain the same tensor structure
+        result_tensor = torch.stack(result)
+        return result_tensor
+
+    @staticmethod
     def sparse_face_matrix(face_index, to_undirected):
         n = face_index.size(0)  # Number of faces
         num_nodes_per_face = face_index.size(1)  # Should be 6
@@ -513,7 +531,7 @@ class TensorUtils:
         return max_act, max_q
 
     @staticmethod
-    def advantage_estimation(r_t: Tensor, value_t: Tensor, done: Tensor, gamma: float) -> tuple[Tensor, Tensor]:
+    def advantage_estimation(r_t: Tensor, value_t: Tensor, done: Tensor, seq_lens: Tensor, gamma: float) -> tuple[Tensor, Tensor]:
         """Computes truncated generalized advantage estimates for a sequence length k.
 
         The advantages are computed in a backwards fashion according to the equation:
@@ -531,32 +549,40 @@ class TensorUtils:
           Multi-step truncated generalized advantage estimation at times [0, k-1].
         """
         assert value_t.ndim == 2
-        assert r_t.ndim == 3 and r_t.shape[2] == 1
-        assert done.ndim == 3 and done.shape[2] == 1
+        assert r_t.ndim == 2
+        assert done.ndim == 1
         LAMBDA = 0.95
+        b, t = value_t.shape
 
-        r_t = r_t[:, :, 0]
-        done = done[:, :, 0]
+        # value_t_ = torch.zeros_like(value_t)
+        # value_tp1_ = torch.zeros_like(value_t)
 
-        value_t_ = torch.zeros_like(value_t)
-        value_tp1_ = torch.zeros_like(value_t)
+        value_tp1_ = torch.zeros(b, t - 1)
+        value_tp1_[done, :] = torch.cat((value_t[done, 2:], torch.zeros(done.sum(), 1)), dim=1)
+        value_tp1_[~done, :] = value_t[~done, 1:]
 
-        value_tp1_[:, :-1] = value_t[:, 1:]
-        value_t_[:, :-1] = value_t[:, :-1]
+        value_t_ = torch.zeros(b, t - 1)
+        value_t_[done, :] = value_t[done, 1:]
+        value_t_[~done, :] = value_t[~done, :-1]
 
-        value_t_[done] = value_t[done]
-        value_tp1_[done] = 0
+        r_t = TensorUtils.pop_elements(r_t, done)
 
-        delta_t = r_t + gamma * value_tp1_ - value_t_
+        delta_value = gamma * value_tp1_ - value_t_
+
+        delta_t = r_t + delta_value
 
         advantage_t = torch.zeros_like(delta_t, dtype=torch.float32)
 
-        gae_t = 0
-        for i in reversed(range(len(delta_t))):
-            gae_t = delta_t[i] + gamma * LAMBDA * gae_t
-            advantage_t[i] = gae_t
+        gae_t = torch.zeros(b)
+        t = seq_lens.clone() - 2
+        for _ in range(delta_t.shape[1]):
+            seq_mask = t >= 0
+            t_ = t[seq_mask]
+            gae_t[seq_mask] = delta_t[seq_mask, t_] + gamma * LAMBDA * gae_t[seq_mask]
+            advantage_t[seq_mask, t_] = gae_t[seq_mask]
+            t -= 1
 
-        return_t = advantage_t + value_t_.squeeze()
+        return_t = advantage_t + value_t_
         advantage_t = (advantage_t - advantage_t.mean()) / (advantage_t.std() + 1e-8)
         return advantage_t, return_t
 

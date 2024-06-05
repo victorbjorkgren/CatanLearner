@@ -216,16 +216,17 @@ class PPOTrainer(Trainer):
         transition: PPOTransition = sample["transition"].to(self.net.on_device)
         batch_range = self.batch_range[:inds.shape[0]]
 
-        done = transition.reward_pack.done
+        done = transition.reward_pack.done.any(1)
         value = transition.action_pack.value
         i_am_player = transition.reward_pack.player
-        if done.sum() > 0:
-            breakpoint()
+        # if done.sum() > 0:
+        #     breakpoint()
         b, t = value.shape
         mask = (torch.arange(t)[None, :] >= transition.seq_lens.squeeze()[:, None]).to(self.net.on_device)
+        mask = TensorUtils.pop_elements(mask, done)
 
         reward = transition.reward_pack.reward * self.reward_scale
-        advantage, returns = TensorUtils.advantage_estimation(reward, value, done, self.gamma)
+        advantage, returns = TensorUtils.advantage_estimation(reward, value, done, transition.seq_lens, self.gamma)
 
         net_output = self.net(sample['transition'].as_net_input)
         pi = self.net.get_pi(net_output, i_am_player)
@@ -234,13 +235,17 @@ class PPOTrainer(Trainer):
 
         # Policy Loss
         pi_logprob = pi_dist.log_prob(transition.action_pack.action)
-        policy_loss = self.proximal_policy_loss(pi_logprob, transition.action_pack.log_prob, advantage)
+        pi_logprob = TensorUtils.pop_elements(pi_logprob, done)
+        pi_act_logprob = TensorUtils.pop_elements(transition.action_pack.log_prob, done)
+        policy_loss = self.proximal_policy_loss(pi_logprob, pi_act_logprob, advantage)
 
         # Value Loss
+        value = TensorUtils.pop_elements(value, done)
         value_loss = 0.5 * torch.square(returns - value)
 
         # Entropy Loss
         entropy_loss = pi_dist.entropy()
+        entropy_loss = TensorUtils.pop_elements(entropy_loss, done)
 
         # Set loss out of sequence to zero
         policy_loss = policy_loss * mask
