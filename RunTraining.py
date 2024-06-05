@@ -36,32 +36,15 @@ actor_net_init = {
     'load_state': False
 }
 
-# learner_q_net = GameNet(learner_net_init).to(LEARNER_DEVICE)
-# target_q_net = GameNet(learner_net_init).to(LEARNER_DEVICE)
-# target_q_net.clone_state(learner_q_net)
-# actor_q_net_list = [GameNet(actor_net_init).to(ACTOR_DEVICE) for _ in range(N_PLAYERS)]
-
 learner_net = PPONet(learner_net_init, batch_size=BATCH_SIZE)
 actor_net_list = [PPONet(actor_net_init, batch_size=BATCH_SIZE) for _ in range(N_PLAYERS)]
 
 buffer = InMemBuffer(
     alpha=REPLAY_ALPHA,
     beta=REPLAY_BETA,
-    # capacity=REPLAY_MEMORY_SIZE,
     capacity=BATCH_SIZE,
     max_seq_len=MAX_SEQUENCE_LENGTH,
-    # preload_size=BATCH_SIZE * 4,
-    # batch_size=BATCH_SIZE
 )
-# trainer = QTrainer(
-#     q_net=learner_q_net,
-#     target_net=target_q_net,
-#     buffer=buffer,
-#     batch_size=BATCH_SIZE,
-#     gamma=GAMMA,
-#     learning_rate=LEARNING_RATE,
-#     reward_scale=REWARD_SCALE
-# )
 trainer = PPOTrainer(
     net=learner_net,
     buffer=buffer,
@@ -70,16 +53,6 @@ trainer = PPOTrainer(
     learning_rate=LEARNING_RATE,
     reward_scale=REWARD_SCALE
 )
-# agent_list = [
-#     QAgent(
-#         q_net=net,
-#         game=game,
-#         buffer=buffer,
-#         max_sequence_length=MAX_SEQUENCE_LENGTH,
-#         burn_in_length=BURN_IN_LENGTH
-#     )
-#     for net in actor_q_net_list
-# ]
 agent_list = [
     PPOAgent(
         net=net,
@@ -106,7 +79,8 @@ def learner_loop():
     while not stop_event.is_set():
         td_loss = trainer.tick()
         td_loss_hist.append(td_loss)
-        writer.add_scalar('TD Loss smooth', sum(td_loss_hist) / HISTORY_DISPLAY, trainer.tick_iter)
+        td_loss_mean = sum(td_loss_hist) / max(1, len(td_loss_hist))
+        writer.add_scalar('TD Loss smooth', td_loss_mean, trainer.tick_iter)
         writer.add_scalar('TD Loss', td_loss, trainer.tick_iter)
 
 
@@ -120,7 +94,6 @@ def actor_loop():
         action = game.current_agent.sample_action(observation, i_am_player=current_player)
         reward, done, succeeded = game.step(action)
         game.player_agents[current_player].update_reward(reward, done, game, current_player)
-        # game.player_agents[current_player].signal_failure(not succeeded)
 
         # On episode termination
         if done:
@@ -128,16 +101,9 @@ def actor_loop():
                 game.render(training_img=True)
             agent_tracker.update_elo()
             titan = agent_tracker.get_titan()
-            # print(titan.episode_actions)
             writer.add_scalar('TitanLastScore', titan.episode_score, game.episode)
             writer.add_scalar('TitanAvgScore', titan.avg_score, game.episode)
-            # writer.add_scalar('RandomElo', agent_tracker.random_elo, game.episode)
-            # writer.add_scalar('TitanElo', agent_tracker.titan_elo, game.episode)
             writer.add_scalar('TitanBeatTime', titan.avg_beat_time, game.episode)
-            # try:
-            #     writer.add_histogram('TitanActions', titan.episode_actions, game.episode, bins=range(3))
-            # except ValueError:
-            #     pass
             writer.flush()
             for ii in range(N_PLAYERS):
                 game.player_agents[ii].signal_episode_done(ii)
@@ -148,7 +114,7 @@ def actor_loop():
 
         iterator.set_postfix_str(
             f"Ep: {game.episode}-{int(game.turn)}, "
-            f"TD Loss: {sum(td_loss_hist) / HISTORY_DISPLAY:.3e} (tick {trainer.tick_iter:d}), "
+            f"TD Loss: {td_loss_mean:.3e} (tick {trainer.tick_iter:d}), "
             f"Score: {[int(player.points) for player in game.players]}, "
             f"ScoreHist: {[agent.avg_score for agent in game.player_agents]}, "
             f"WinHist: {[agent.sum_win for agent in game.player_agents]}, "
@@ -183,6 +149,7 @@ def actor_worker():
 
 
 td_loss_hist = deque(maxlen=HISTORY_DISPLAY)
+td_loss_mean = 0
 
 stop_event = threading.Event()
 
