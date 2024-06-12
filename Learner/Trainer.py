@@ -253,6 +253,8 @@ class PPOTrainer(Trainer):
         reward = transition.reward_pack.reward * self.reward_scale
         masks = transition.action_pack.masks
 
+        value = value.sign() * torch.log(value.abs() + 1.)
+
         assert done.all().item(), 'Currently only handles done terminated sequences'
         advantage, returns = TensorUtils.advantage_estimation(reward, value, done, transition.seq_lens, self.gamma)
         # advantage, returns = TensorUtils.advantage_estimation(reward, torch.zeros_like(value), done, transition.seq_lens, self.gamma)
@@ -261,7 +263,7 @@ class PPOTrainer(Trainer):
         stats['advantage'] = advantage.clone().detach().cpu()
         stats['returns'] = returns.clone().detach().cpu()
 
-        returns = returns.sign() * torch.log(returns.abs() + 1.)
+
 
         net_output = self.net(sample['transition'].as_net_input)
         self.apply_masks(net_output, masks)
