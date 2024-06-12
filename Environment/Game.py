@@ -182,9 +182,9 @@ class Game:
                 face_hits = torch.nonzero(self.board.state.face_attr)
                 for hit in face_hits:
                     self.give_resource(hit)
-                # good_place_to_start = self.players[self.current_player].hand >= torch.tensor([1, 1, 0, 1, 1])
-                # if good_place_to_start.all():
-                #     reward += 1
+                good_place_to_start = self.players[self.current_player].hand >= torch.tensor([1, 1, 0, 1, 1])
+                if good_place_to_start.all():
+                    reward += .1
 
                 # Check if first turn has ended
                 if self.current_player == (self.n_players - 1):
