@@ -317,5 +317,9 @@ class BaseAgent:
         return sum(self.win_history)
 
     @property
+    def mean_win(self):
+        return sum(self.win_history) / max(1, len(self.win_history))
+
+    @property
     def episode_actions(self) -> T.Tensor:
         return T.tensor([self.n_houses, self.n_roads, self.n_trades])

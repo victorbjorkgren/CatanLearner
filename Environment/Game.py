@@ -11,15 +11,16 @@ from torch import Tensor
 from torch_geometric.utils.convert import to_networkx
 
 from Learner.Agents import BaseAgent
-from Learner.Utility.ActionTypes import BaseAction, BuildAction, TradeAction, NoopAction
+from Learner.Utility.ActionTypes import BaseAction, BuildAction, TradeAction, NoopAction, SettlementAction, RoadAction
 from Learner.Utility.DataTypes import GameState
+from Learner.constants import LATENT_REWARD
 from .Board import Board
 from .Player import Player
 from .constants import *
 
 
 class Game:
-    def __init__(self, n_players, failed_action_penalty=-.01, max_turns=500, max_no_progress=100, start_episode=0):
+    def __init__(self, n_players, max_turns=500, max_no_progress=100, start_episode=0):
         self.max_no_progress = max_no_progress
         self.n_players = n_players
         self.max_turns = max_turns
@@ -40,7 +41,7 @@ class Game:
         self.players = [Player(None)] * self.n_players
 
         self.zero_reward = 0
-        self.failed_action_penalty = failed_action_penalty
+        self.failed_action_penalty = -LATENT_REWARD
         self.listeners = dict()
 
     @property
@@ -64,9 +65,9 @@ class Game:
             road_mask = self.board.sparse_road_mask(i, self.players[i].hand, self.first_turn, self.first_turn_village_switch)
             village_mask = self.board.sparse_village_mask(i, self.players[i].hand, self.first_turn, self.first_turn_village_switch)
 
+            # Pad with action possible mask
             node_x = torch.cat((node_x, torch.zeros((N_NODES, 1))), dim=1)
             edge_x = torch.cat((edge_x, torch.zeros((N_ROADS * 2, 1))), dim=1)
-
             node_x[village_mask, -1] = 1
             edge_x[road_mask, -1] = 1
         # node_x = T.cat((node_x, player_states.repeat((node_x.shape[0], 1))), dim=1)
@@ -117,16 +118,14 @@ class Game:
             else:
                 return self.failed_action_penalty + reward, False, True
 
-        if isinstance(action, BuildAction):
-            action = self.decode_build_action(action)
-            if action[0] == 1:
-                if not self.build_road(action[1], self.current_player):
-                    succeeded = False
-            elif action[0] == 2:
-                if not self.build_village(action[1], self.current_player):
-                    succeeded = False
-                else:
-                    reward += 1
+        if isinstance(action, RoadAction):
+            if not self.build_road(action.index.item(), self.current_player):
+                succeeded = False
+        elif isinstance(action, SettlementAction):
+            if not self.build_village(action.index, self.current_player):
+                succeeded = False
+            else:
+                reward += 1
         elif isinstance(action, TradeAction):
             succeeded = self.players[self.current_player].trade(give_ind=action.give, get_ind=action.get)
 
@@ -162,17 +161,16 @@ class Game:
         return not self.first_turn
 
     def first_turn_step(self, action: BuildAction) -> Tuple[bool, float]:
-        assert isinstance(action, BuildAction)
-        action = self.decode_build_action(action)
+        assert isinstance(action, RoadAction) | isinstance(action, SettlementAction)
         reward = 0.
         if self.first_turn_village_switch:
-            if action[0] == 2:
-                build_succeeded = self.build_village(action[1], self.current_player, first_turn=True)
+            if isinstance(action, SettlementAction):
+                build_succeeded = self.build_village(action.index, self.current_player, first_turn=True)
             else:
                 build_succeeded = False
         else:
-            if action[0] == 1:
-                build_succeeded = self.build_road(action[1], self.current_player, first_turn=True)
+            if isinstance(action, RoadAction):
+                build_succeeded = self.build_road(action.index.item(), self.current_player, first_turn=True)
             else:
                 build_succeeded = False
         if build_succeeded:
@@ -242,6 +240,7 @@ class Game:
         if resource >= 0:
             for i, gain in enumerate(player_gains):
                 self.players[i].add(resource.item(), gain.item())
+                self.players[i].latent_reward += LATENT_REWARD
 
     @staticmethod
     def maritime_trade(player: Player, give: Tensor, get: Tensor, rate):

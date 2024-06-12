@@ -20,6 +20,8 @@ class Player:
         self.n_roads = 0
         self.agent = agent
 
+        self.latent_reward = 0.
+
         self.trade_pile = T.tensor([0, 0, 0, 0, 0])
         self.best_trade_rate = T.tensor([4, 4, 4, 4, 4])
 
@@ -37,6 +39,11 @@ class Player:
                  f"Lumber {int(self.hand[3])}\n"
                  f"Wool {int(self.hand[4])}\n")
                 + f"\nPoints {int(self.points)}")
+
+    def flush_reward(self):
+        r = self.latent_reward
+        self.latent_reward = 0
+        return r
 
     @property
     def state(self):

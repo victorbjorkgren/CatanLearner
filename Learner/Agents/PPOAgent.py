@@ -1,14 +1,15 @@
-from collections import deque
+from collections import deque, namedtuple
 from random import randint
 
 import torch
 import torch as T
 
 from Environment import Game
-from Environment.constants import N_NODES
+from Environment.constants import N_NODES, N_ROADS
 from Learner.Agents.BaseAgent import BaseAgent
-from Learner.Utility.ActionTypes import BaseAction, TradeAction, type_mapping, NoopAction, BuildAction
-from Learner.Utility.CustomDistributions import CatanActionSampler
+from Learner.Utility.ActionTypes import BaseAction, TradeAction, NoopAction, BuildAction, \
+    sparse_type_mapping, RoadAction, SettlementAction, SparsePi
+from Learner.Utility.CustomDistributions import SparseCatanActionSampler
 from Learner.Utility.DataTypes import PPOActionPack, PPORewardPack, PPOTransition, GameState, NetInput
 from Learner.Nets import PPONet
 from Learner.PrioReplayBuffer import PrioReplayBuffer
@@ -49,9 +50,13 @@ class PPOAgent(BaseAgent):
         ht, ct = self.h0, self.c0
 
         # Get masks
-        buildable = self.get_build_mask(i_am_player)
-        build_mask = torch.zeros((N_NODES, N_NODES))
-        build_mask[buildable[0, :], buildable[1, :]] = 1
+        buildable = self.get_sparse_build_mask(i_am_player)
+        road_mask = torch.zeros((N_ROADS * 2))
+        settle_mask = torch.zeros((N_NODES))
+        road_mask[buildable.road_mask] = 1.0
+        settle_mask[buildable.village_mask] = 1.0
+        # build_mask = torch.zeros((N_NODES, N_NODES))
+        # build_mask[buildable[0, :], buildable[1, :]] = 1
         # build_mask = ~state[0, :54, :54, -N_PLAYERS+i_am_player].bool()
         tradable = self.game.can_trade(i_am_player, 4)
         trade_mask = T.isin(T.arange(5), tradable)
@@ -66,27 +71,48 @@ class PPOAgent(BaseAgent):
         pi = self.net.get_pi(net_out, i_am_player)
 
         # Apply masks
-        pi.map *= build_mask
+        pi.settlement *= settle_mask
+        pi.road *= road_mask
         pi.trade.give *= trade_mask
-        pi.type[type_mapping.inverse[NoopAction]] *= no_op_mask
 
+        type_mask = torch.ones_like(pi.type)
+        type_mask[:, :, sparse_type_mapping.inverse[NoopAction]] *= no_op_mask
         if pi.trade.give.nonzero().numel() == 0:
-            trade_type_ind = type_mapping.inverse[TradeAction]
-            pi.type[trade_type_ind] = 0
+            trade_type_ind = sparse_type_mapping.inverse[TradeAction]
+            type_mask[:, :, trade_type_ind] = 0
             pi.trade.give += 1 / pi.trade.give.numel()
-        if pi.map.nonzero().numel() == 0:
-            build_type_ind = type_mapping.inverse[BuildAction]
-            pi.type[build_type_ind] = 0
-            pi.map += 1 / pi.map.numel()
+        if pi.road.nonzero().numel() == 0:
+            road_type_ind = sparse_type_mapping.inverse[RoadAction]
+            type_mask[:, :, road_type_ind] = 0
+            pi.road += 1 / pi.road.numel()
+        if pi.settlement.nonzero().numel() == 0:
+            settle_type_ind = sparse_type_mapping.inverse[SettlementAction]
+            type_mask[:, :, settle_type_ind] = 0
+            pi.settlement += 1 / pi.settlement.numel()
+
+        pi.type *= type_mask
+
+        # Re-normalize probs
+        pi.settlement = pi.settlement / pi.settlement.sum(-1)
+        pi.road = pi.road / pi.road.sum(-1)
+        pi.trade.give = pi.trade.give / pi.trade.give.sum(-1)
         pi.type = pi.type / pi.type.sum(-1)
 
-        sampler = CatanActionSampler(pi)
+        # Sample
+        sampler = SparseCatanActionSampler(pi)
         action = sampler.sample()
-        logprob = sampler.log_prob(action).unsqueeze(0).unsqueeze(0)
-        value = net_out.state_value[:1, :1, i_am_player]
 
         if self.my_name in ['Titan', 'latest']:
-            self.action_pack_buffer.append(PPOActionPack(action, logprob, value, ht, ct))
+            logprob = sampler.log_prob(action)[None, None, :]
+            value = net_out.state_value[:1, :1, i_am_player]
+            masks = SparsePi(
+                type=type_mask,
+                road=road_mask[None, None, :],
+                settlement=settle_mask[None, None, :],
+                trade=TradeAction(give=trade_mask[None, None, :],
+                                  get=torch.ones_like(pi.trade.get))
+            )
+            self.action_pack_buffer.append(PPOActionPack(action, masks, logprob, value, ht, ct))
         return action
 
     def get_build_mask(self, player) -> T.Tensor:
@@ -95,6 +121,14 @@ class PPOAgent(BaseAgent):
 
         mask = T.cat((road_mask, village_mask.repeat(2, 1)), dim=1)
         return mask
+
+    def get_sparse_build_mask(self, player) -> namedtuple('sparse_mask', ['road_mask', 'village_mask']):
+        road_mask = self.game.board.sparse_road_mask(player, self.game.players[player].hand, self.game.first_turn, self.game.first_turn_village_switch)
+        village_mask = self.game.board.sparse_village_mask(player, self.game.players[player].hand, self.game.first_turn, self.game.first_turn_village_switch)
+        if road_mask.numel() > 0:
+            _, road_inds = TensorUtils.pairwise_isin(road_mask, self.game.board.state.edge_index)
+            road_mask = road_inds[:, 1]
+        return namedtuple('sparse_mask', ['road_mask', 'village_mask'])(road_mask, village_mask)
 
     def signal_episode_done(self, i_am_player: int) -> None:
         super().signal_episode_done(i_am_player)
@@ -124,9 +158,11 @@ class PPOAgent(BaseAgent):
             expected_length = self.max_seq_length - self.burn_in_length
             self.ticks_since_flush = randint(-expected_length, -(expected_length // 3))
 
-    def update_reward(self, reward: float, done: bool, game: Game, i_am_player: int) -> None:
+    def update_score(self, reward):
         if reward > 0.:
             self.episode_score += 1
+
+    def update_reward(self, reward: float, done: bool, game: Game, i_am_player: int) -> None:
         if self.my_name not in ['Titan', 'latest']:
             return
         rew_pack = PPORewardPack(

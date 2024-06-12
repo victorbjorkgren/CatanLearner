@@ -84,7 +84,7 @@ class PowerfulLayer(nn.Module):
 
         # Norm and Residual
         out = self.adj_norm * out.permute(0, 1, 3, 4, 2)
-        return out + matrix
+        return F.gelu(out + matrix)
 
 
 class MultiHeadAttention(nn.Module):

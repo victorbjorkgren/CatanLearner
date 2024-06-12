@@ -21,11 +21,11 @@ def assert_capacity(n):
 data_lock = threading.Lock()
 
 
-def synchronized(func):
-    def wrapper(*args, **kwargs):
+def synchronized_buffer(func):
+    def buffer_wrapper(*args, **kwargs):
         with data_lock:
             return func(*args, **kwargs)
-    return wrapper
+    return buffer_wrapper
 
 
 class PrioReplayBuffer:
@@ -177,7 +177,7 @@ class InMemBuffer(PrioReplayBuffer):
         # self._next_idx = self._size % self._capacity
         self.prios += self._max_priority ** self._alpha
 
-    @synchronized
+    @synchronized_buffer
     def sample(self, n):
         sample_inds, prob = self._sample_indices(n)
 
@@ -194,11 +194,11 @@ class InMemBuffer(PrioReplayBuffer):
 
         return samples
 
-    @synchronized
+    @synchronized_buffer
     def add(self,
             transition: Holders
             ) -> None:
-        self.data.append(transition)
+        self.data.append(transition.detach())
         self.prios[:self.mem_size] = self._max_priority ** self._alpha
 
     @property

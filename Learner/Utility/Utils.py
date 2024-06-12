@@ -150,12 +150,8 @@ class Holders:
                 if 'not_stackable' in field_.metadata.keys():
                     result_tensors[field_name] = field_values
                 else:
-                    try:
-                        field_values = TensorUtils.pad_tensor_list(field_values)
-                        result_tensors[field_name] = torch.stack(field_values, dim=dim)
-                    except:
-                        field_values = TensorUtils.pad_tensor_list(field_values)
-                        breakpoint()
+                    field_values = TensorUtils.pad_tensor_list(field_values)
+                    result_tensors[field_name] = torch.stack(field_values, dim=dim)
         return cls(**result_tensors)
 
     def deep_copy(self):
@@ -201,6 +197,8 @@ class Holders:
                 setattr(self, field_.name, val.detach())
             elif isinstance(val, Holders):
                 val.detach()
+            elif isinstance(val, list):
+                setattr(self, field_.name, [e.detach() for e in val])
             else:
                 raise TypeError(f'Unexpected type {type(val)}')
         return self
@@ -442,7 +440,7 @@ class TensorUtils:
         return tuple(tensor.numpy().flatten())
 
     @staticmethod
-    def pairwise_isin(tensor_a: Tensor, tensor_b: Tensor) -> Tensor:
+    def pairwise_isin(tensor_a: Tensor, tensor_b: Tensor) -> (Tensor, Tensor):
         # Step 1: Broadcasting and Comparison
         # We want each pair in tensor_a (2, N) to compare against every pair in tensor_b (2, M)
         # So, we reshape tensor_a to (2, N, 1) and tensor_b to (2, 1, M) to prepare for broadcasting
@@ -456,8 +454,9 @@ class TensorUtils:
         # Step 3: Aggregation
         # Determine if each pair in tensor_a matches with any pair in tensor_b
         matches = pair_matches.any(dim=1)
+        indices = pair_matches.argwhere()
 
-        return matches
+        return matches, indices
 
     @staticmethod
     def gather_actions(q_values: Tensor, trade_q_values: Tensor, indices: Tensor, was_trade: Optional[Tensor]) -> Tensor:
@@ -531,6 +530,26 @@ class TensorUtils:
         return max_act, max_q
 
     @staticmethod
+    def non_zero_mean(tensor, dim):
+        mean = tensor.sum(dim) / tensor.count_nonzero(dim)
+        return mean.unsqueeze(1)
+
+    @staticmethod
+    def non_zero_std(tensor, dim):
+        count_nonzero = tensor.count_nonzero(dim)
+        sum_nonzero = tensor.sum(dim)
+        mean_nonzero = sum_nonzero / count_nonzero
+        mean_nonzero = mean_nonzero.unsqueeze(1)
+
+        squared_diff = (tensor - mean_nonzero) ** 2
+        squared_diff = squared_diff * (tensor != 0).float()
+        sum_squared_diff = squared_diff.sum(dim)
+
+        variance_nonzero = sum_squared_diff / count_nonzero
+        std_nonzero = torch.sqrt(variance_nonzero)
+        return std_nonzero.unsqueeze(1)
+
+    @staticmethod
     def advantage_estimation(r_t: Tensor, value_t: Tensor, done: Tensor, seq_lens: Tensor, gamma: float) -> tuple[Tensor, Tensor]:
         """Computes truncated generalized advantage estimates for a sequence length k.
 
@@ -556,16 +575,20 @@ class TensorUtils:
 
         # value_t_ = torch.zeros_like(value_t)
         # value_tp1_ = torch.zeros_like(value_t)
+        mask = (torch.arange(t)[None, :] >= seq_lens[:, None].cpu()).to(r_t.device)
+        value_t[mask] = 0
 
-        value_tp1_ = torch.zeros(b, t - 1, device=r_t.device)
-        value_tp1_[done, :] = torch.cat((value_t[done, 2:], torch.zeros(done.sum(), 1, device=r_t.device)), dim=1)
-        value_tp1_[~done, :] = value_t[~done, 1:]
+        # value_tp1_ = torch.zeros(b, t - 1, device=r_t.device)
+        # value_tp1_[done, :] = torch.cat((value_t[done, 2:], torch.zeros(done.sum(), 1, device=r_t.device)), dim=1)
+        # value_tp1_[~done, :] = value_t[~done, 1:]
+        value_tp1_ = torch.cat((value_t[:, 1:], torch.zeros(done.sum(), 1, device=r_t.device)), dim=1)
 
-        value_t_ = torch.zeros(b, t - 1, device=r_t.device)
-        value_t_[done, :] = value_t[done, 1:]
-        value_t_[~done, :] = value_t[~done, :-1]
+        # value_t_ = torch.zeros(b, t - 1, device=r_t.device)
+        # value_t_[done, :] = value_t[done, 1:]
+        # value_t_[~done, :] = value_t[~done, :-1]
+        value_t_ = value_t.clone()
 
-        r_t = TensorUtils.pop_elements(r_t, done)
+        # r_t = TensorUtils.pop_elements(r_t, done)
 
         delta_value = gamma * value_tp1_ - value_t_
 
@@ -583,7 +606,8 @@ class TensorUtils:
             t -= 1
 
         return_t = advantage_t + value_t_
-        advantage_t = (advantage_t - advantage_t.mean()) / (advantage_t.std() + 1e-8)
+        advantage_t = (advantage_t - TensorUtils.non_zero_mean(advantage_t, 1)) / (TensorUtils.non_zero_std(advantage_t, 1) + 1e-8)
+        advantage_t[mask] = 0
         return advantage_t, return_t
 
     @classmethod

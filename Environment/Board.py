@@ -205,7 +205,7 @@ class Board:
         all_roads = self.state.edge_index[:, all_road_inds]
         connected_roads = T.isin(self.state.edge_index, player_road_nodes).any(0)
         connected_roads = self.state.edge_index[:, connected_roads]
-        already_built = TensorUtils.pairwise_isin(connected_roads, all_roads)
+        already_built, _ = TensorUtils.pairwise_isin(connected_roads, all_roads)
 
         return connected_roads[:, ~already_built]
 

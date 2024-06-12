@@ -1,15 +1,18 @@
 import os
 from abc import abstractmethod
+from dataclasses import fields
 from time import sleep
+from typing import Dict
 
 import torch
 import torch as T
 import torch.nn as nn
 import torch.optim as optim
 
-from Learner.Utility.DataTypes import PPOTransition, NetInput
+from Learner.Utility.ActionTypes import SparsePi, TradeAction
+from Learner.Utility.CustomDistributions import SparseCatanActionSampler
+from Learner.Utility.DataTypes import PPOTransition, NetInput, NetOutput
 from Learner.constants import PPO_ENTROPY_COEF, PPO_VALUE_COEF, SAVE_LATEST_NET_INTERVAL, SAVE_CHECKPOINT_NET_INTERVAL
-from Learner.Utility.CustomDistributions import CatanActionSampler
 from Learner.Loss import Loss
 from Learner.Nets import GameNet, PPONet
 from Learner.PrioReplayBuffer import PrioReplayBuffer
@@ -33,18 +36,15 @@ class Trainer:
         self.find_start_tick()
 
     @abstractmethod
-    def train(self) -> float:
+    def train(self) -> (float, Dict):
         raise NotImplementedError
 
-    def tick(self):
+    def tick(self) -> (float, Dict):
         if self.buffer.mem_size < self.batch_size:
             sleep(1)
-            return 0.
+            return 0., {}
 
-        try:
-            td_loss = self.train()
-        except:
-            self.train()
+        td_loss, stats = self.train()
 
         if self.tick_iter % SAVE_LATEST_NET_INTERVAL == 0:
             self.save('latest')
@@ -53,7 +53,7 @@ class Trainer:
 
         self.tick_iter += 1
 
-        return td_loss
+        return td_loss, stats
 
     def find_start_tick(self):
         str_start = len(self.name) + 1
@@ -211,60 +211,97 @@ class PPOTrainer(Trainer):
         policy_loss = torch.min(ratio * advantages.detach(), clipped_ratios * advantages.detach())
         return policy_loss
 
-    def train(self) -> float:
+    def apply_masks(self, net_output: NetOutput, masks: SparsePi):
+        for field in fields(net_output.pi):
+            if field.name == 'trade':
+                value = net_output.pi.trade.give
+                value = value * masks.trade.give.unsqueeze(-1)
+                value[(value == 0).all(-2).squeeze(-1)] = 1.
+                value = value / value.sum(dim=-2, keepdim=True)
+                value[value.isnan()] = 1 / value.shape[2]
+                net_output.pi.trade.give = value
+            else:
+                value = getattr(net_output.pi, field.name)
+                value = value * getattr(masks, field.name).unsqueeze(-1)
+                value[(value == 0).all(-2).squeeze(-1)] = 1.
+                value = value / value.sum(dim=-2, keepdim=True)
+                value[value.isnan()] = 1 / value.shape[2]
+                setattr(net_output.pi, field.name, value)
+
+        # pi_type = net_output.pi.type * masks.type.unsqueeze(-1)
+        # pi_road = net_output.pi.road * masks.road.unsqueeze(-1)
+        # pi_settle = net_output.pi.settlement * masks.settlement.unsqueeze(-1)
+        # pi_trade_give = net_output.pi.trade.give * masks.trade.give.unsqueeze(-1)
+        #
+        # pi_type = pi_type / pi_type.sum(-1, keepdim=True)
+        # pi_road = pi_road / pi_road.sum(-1, keepdim=True)
+        # pi_settle = pi_settle / pi_settle.sum(-1, keepdim=True)
+        # pi_trade_give = pi_trade_give / pi_trade_give.sum(-1, keepdim=True)
+        #
+        # return SparsePi(type=pi_type, settlement=pi_settle, road=pi_road, trade=TradeAction(give=pi_trade_give, get=net_output.pi_trade.get))
+
+    def train(self) -> (float, Dict):
         assert self.buffer.mem_size >= self.batch_size
+        stats = {}
 
         sample = self.buffer.sample(self.batch_size)
-        inds = sample["inds"]
         transition: PPOTransition = sample["transition"].to(self.net.on_device)
-        batch_range = self.batch_range[:inds.shape[0]]
 
         done = transition.reward_pack.done.any(1)
         value = transition.action_pack.value
         i_am_player = transition.reward_pack.player
-        # if done.sum() > 0:
-        #     breakpoint()
-        b, t = value.shape
-        mask = (torch.arange(t)[None, :] >= transition.seq_lens[:, None].cpu()).to(self.net.on_device)
-        mask = TensorUtils.pop_elements(mask, done)
-
         reward = transition.reward_pack.reward * self.reward_scale
+        masks = transition.action_pack.masks
+
+        assert done.all().item(), 'Currently only handles done terminated sequences'
         advantage, returns = TensorUtils.advantage_estimation(reward, value, done, transition.seq_lens, self.gamma)
+        # advantage, returns = TensorUtils.advantage_estimation(reward, torch.zeros_like(value), done, transition.seq_lens, self.gamma)
+        # advantage = TensorUtils.propagate_rewards(self.gamma, reward)
+        # returns = advantage.clone()
+        stats['advantage'] = advantage.clone().detach().cpu()
+        stats['returns'] = returns.clone().detach().cpu()
+
+        returns = returns.sign() * torch.log(returns.abs() + 1.)
 
         net_output = self.net(sample['transition'].as_net_input)
+        self.apply_masks(net_output, masks)
         pi = self.net.get_pi(net_output, i_am_player)
 
-        pi_dist = CatanActionSampler(pi)
+        pi_dist = SparseCatanActionSampler(pi)
 
         # Policy Loss
         pi_logprob = pi_dist.log_prob(transition.action_pack.action)
-        pi_logprob = TensorUtils.pop_elements(pi_logprob, done)
-        pi_act_logprob = TensorUtils.pop_elements(transition.action_pack.log_prob, done)
-        policy_loss = self.proximal_policy_loss(pi_logprob, pi_act_logprob, advantage)
+        policy_loss = self.proximal_policy_loss(pi_logprob, transition.action_pack.log_prob, advantage)
 
         # Value Loss
-        value = TensorUtils.pop_elements(value, done)
+        value = net_output.state_value.squeeze(-1)
         value_loss = 0.5 * torch.square(returns - value)
 
         # Entropy Loss
         entropy_loss = pi_dist.entropy()
-        entropy_loss = TensorUtils.pop_elements(entropy_loss, done)
 
         # Set loss out of sequence to zero
-        policy_loss = policy_loss * mask
-        entropy_loss = entropy_loss * mask
-        value_loss = value_loss * mask
+        b, t = value.shape
+        out_of_seq_mask = (torch.arange(t)[None, :] >= transition.seq_lens[:, None].cpu()).to(self.net.on_device)
+        policy_loss = policy_loss * ~out_of_seq_mask
+        entropy_loss = entropy_loss * ~out_of_seq_mask
+        value_loss = value_loss * ~out_of_seq_mask
 
         policy_loss = torch.mean(policy_loss)
         entropy_loss = torch.mean(entropy_loss)
         value_loss = torch.mean(value_loss)
 
+        stats['policy_loss'] = -policy_loss.detach().cpu().item()
+        stats['value_loss'] = value_loss.detach().cpu().item()
+        stats['entropy_loss'] = -entropy_loss.detach().cpu().item()
+
         # Combine policy loss, value loss, entropy loss.
         # Negative sign to indicate we want to maximize the policy gradient objective function and entropy to encourage exploration
         loss = -(policy_loss + PPO_ENTROPY_COEF * entropy_loss) + PPO_VALUE_COEF * value_loss
+        stats['loss'] = loss.detach().cpu().item()
 
         self.optimizer.zero_grad()
         loss.backward()
         self.optimizer.step()
 
-        return loss.item()
+        return loss.item(), stats

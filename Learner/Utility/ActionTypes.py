@@ -2,6 +2,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional
 
+import torch
 from bidict import bidict
 from torch import Tensor
 
@@ -24,6 +25,16 @@ class BuildAction(BaseAction):
 
 
 @dataclass
+class RoadAction(BaseAction):
+    index: Tensor
+
+
+@dataclass
+class SettlementAction(BaseAction):
+    index: Tensor
+
+
+@dataclass
 class NoopAction(BaseAction):
     pass
 
@@ -35,8 +46,24 @@ class Pi:
     trade: TradeAction
 
 
-type_mapping = bidict({
+# dense_type_mapping = bidict({
+#     0: NoopAction,
+#     1: TradeAction,
+#     2: BuildAction,
+# })
+
+
+@dataclass
+class SparsePi(Holders):
+    type: Tensor
+    settlement: Tensor
+    road: Tensor
+    trade: TradeAction
+
+
+sparse_type_mapping = bidict({
     0: NoopAction,
     1: TradeAction,
-    2: BuildAction,
+    2: SettlementAction,
+    3: RoadAction,
 })

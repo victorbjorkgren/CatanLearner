@@ -11,22 +11,24 @@ import torch.nn as nn
 import torch_geometric as pyg
 from torch import Tensor
 from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
+from torch_geometric.nn import GATv2Conv, GINEConv
 
 from Environment import Game
-from Environment.constants import N_RESOURCES, N_ACTION_TYPES, N_GRAPH_NODES, N_NODES
-from Learner.Utility.ActionTypes import TradeAction, Pi
-from Learner.Utility.DataTypes import PPOTransition, NetInput, GameState
+from Environment.constants import N_RESOURCES, N_GRAPH_NODES, N_NODES, N_ROADS
+from Learner.Utility.ActionTypes import TradeAction, Pi, sparse_type_mapping, SparsePi
+from Learner.Utility.DataTypes import PPOTransition, NetInput, GameState, NetOutput
 from Learner.Utility.Utils import TensorUtils, Holders
 from Learner.Layers import MLP, PowerfulLayer, MultiHeadAttention
+from Learner.constants import DENSE_FORWARD
 
 file_lock = threading.Lock()
 
 
-def synchronized(func):
-    def wrapper(*args, **kwargs):
+def synchronized_state(func):
+    def state_wrapper(*args, **kwargs):
         with file_lock:
             return func(*args, **kwargs)
-    return wrapper
+    return state_wrapper
 
 
 class BaseNet(nn.Module):
@@ -37,7 +39,7 @@ class BaseNet(nn.Module):
     def clone_state(self, other):
         self.load_state_dict(other.state_dict(), strict=False)
 
-    @synchronized
+    @synchronized_state
     def save(self, suffix):
         if suffix == 'latest':
             torch.save(self.state_dict(), f'./{self.name}_Agent_Titan.pth')
@@ -51,7 +53,7 @@ class BaseNet(nn.Module):
             os.makedirs('./NetBackup/', exist_ok=True)
             torch.save(self.state_dict(), f'./NetBackup/{self.name}_state_{now}.pth')
 
-    @synchronized
+    @synchronized_state
     def load(self, file: str | int):
         if file == 'latest':
             dir = './'
@@ -68,7 +70,7 @@ class BaseNet(nn.Module):
 
 
 class CoreNet(BaseNet):
-    keys = ['action_type', 'action_matrix', 'action_trade', 'state_value', 'hn', 'cn']
+    keys = ['action_type', 'action_road', 'action_settle', 'action_trade', 'state_value', 'hn', 'cn']
     Output = namedtuple('Output', keys)
 
     def __init__(self,
@@ -119,6 +121,7 @@ class CoreNet(BaseNet):
         self.full_adj = self.full_adj + T.eye(self.full_adj.shape[-1])
         self.full_mask = self.full_adj > 0
 
+        # self.sparse_full = pyg.utils.add_self_loops(self.sparse_full)[0]
         self.state_matrix = T.zeros(
             (self.full_mask.shape[0], self.full_mask.shape[1], self.full_mask.shape[2], self.n_embed))
         self.out_matrix = T.zeros(
@@ -155,22 +158,36 @@ class CoreNet(BaseNet):
         self.state_trade_give = MLP(n_embed, N_RESOURCES * self.n_players, activated_out=True)
         self.state_trade_get = MLP(n_embed, N_RESOURCES * self.n_players, activated_out=True)
 
-        self.action_type_head = MLP(n_embed, N_ACTION_TYPES * self.n_players, activated_out=True)
-
         self.lstm = nn.LSTM(n_embed, n_embed, batch_first=True)
 
-        self.power_layers = nn.Sequential(*[
+        if DENSE_FORWARD:
+            self.forward_func = self.dense_forward
+            self.power_layers = nn.Sequential(*[
+                PowerfulLayer(n_embed, n_embed, self.full_adj_norm.to(self.on_device)).to(self.on_device)
+                for _ in range(n_power_layers)
+            ])
+            # self.n_action_types = len(dense_type_mapping)
+            raise NotImplementedError
+        else:
+            self.forward_func = self.sparse_forward
+            n_heads = 2
+            assert n_embed % n_heads == 0
+            self.gnn_layers = nn.ModuleList([GATv2Conv(n_embed, n_embed, edge_dim=n_embed, n_heads=n_heads) for _ in range(n_power_layers)])
+            # self.gnn_layers = nn.ModuleList([GINEConv(MLP(n_embed, n_embed), train_eps=True) for _ in range(n_power_layers)])
+            # self.gnn_layers = nn.ModuleList([GCNConv()])
+            self.n_action_types = len(sparse_type_mapping)
+            self.edge_padding = torch.zeros(self.sparse_full.shape[1], n_embed)
 
-            PowerfulLayer(n_embed, n_embed, self.full_adj_norm.to(self.on_device)).to(self.on_device)
-            for _ in range(n_power_layers)
-
-        ])
+        self.action_type_head = MLP(n_embed, self.n_action_types * self.n_players, activated_out=True)
 
         self.state_matrix = self.state_matrix.to(self.on_device)
         self.full_mask = self.full_mask.to(self.on_device)
         self.out_matrix = self.out_matrix.to(self.on_device)
 
     def forward(self, core_input: NetInput) -> Output:
+        return self.forward_func(core_input)
+
+    def dense_forward(self, core_input: NetInput) -> Output:
         observation = core_input.state
         seq_lengths = core_input.seq_lens
         h_in = core_input.lstm_h[:1, :, :]
@@ -179,15 +196,17 @@ class CoreNet(BaseNet):
         b, t = observation.node_features.shape[:2]
 
         obs_matrix = observation.to(self.on_device)
+        del observation
         h_in = h_in.to(self.on_device)
         c_in = c_in.to(self.on_device)
 
-        obs_matrix = self.feature_embedding(obs_matrix)
+        obs_matrix = self.dense_feature_embedding(obs_matrix)
         obs_matrix = self.power_layers(obs_matrix)
-        obs_matrix, hn, cn = self.temporal_layer(obs_matrix, seq_lengths, h_in, c_in)
-        action_matrix, state_value = self.action_value_heads(obs_matrix)
+        obs_matrix, hn, cn = self.dense_temporal_layer(obs_matrix, seq_lengths, h_in, c_in)
+        action_matrix, state_value = self.dense_action_value_heads(obs_matrix)
 
         game_state = obs_matrix[:, :, -1, -1, :]
+        del obs_matrix
         action_trade_get = self.action_trade_get(game_state).view((b, t, N_RESOURCES, self.n_players))
         action_trade_give = self.action_trade_give(game_state).view((b, t, N_RESOURCES, self.n_players))
         # state_trade_get = self.state_trade_get(game_state).view((b, t, N_RESOURCES, self.n_players))
@@ -197,11 +216,65 @@ class CoreNet(BaseNet):
         # action_trade = T.stack((action_trade_give, action_trade_get), dim=2)
         # state_trade = T.stack((state_trade_give, state_trade_get), dim=2)
 
-        action_type = self.action_type_head(game_state).view((b, t, N_ACTION_TYPES, self.n_players))
+        action_type = self.action_type_head(game_state).view((b, t, self.n_action_types, self.n_players))
         # ['action_type', 'action_matrix', 'state_matrix', 'action_trade' 'state_trade', 'hn', 'cn']
         return self.Output(action_type, action_matrix, action_trade, state_value, hn, cn)
 
-    def feature_embedding(self, observation: GameState):
+    def sparse_forward(self, core_input: NetInput) -> Output:
+        observation = core_input.state
+        seq_lengths = core_input.seq_lens
+        h_in = core_input.lstm_h[:1, :, :]
+        c_in = core_input.lstm_c[:1, :, :]
+        # assert len(observation.shape) == 5, "QNet wants [B, T, N, N, F]"
+        b, t = observation.node_features.shape[:2]
+
+        observation = observation.to(self.on_device)
+        h_in = h_in.to(self.on_device)
+        c_in = c_in.to(self.on_device)
+        hn, cn = h_in, c_in
+
+        node_f, edge_f = self.sparse_feature_embedding(observation)
+        edge_index = torch.cat([(self.sparse_full.max() + 1) * n + self.sparse_full for n in range(b * t)], dim=1).to(self.on_device)
+        src, dst = edge_index
+        edge_pad = self.edge_padding.repeat(b, t, 1, 1).to(self.on_device)
+        edge_pad[:, :, :N_ROADS * 2, :] = edge_f
+        edge_f = edge_pad
+        node_f = node_f.view(b * t * N_GRAPH_NODES, -1)
+        edge_f = edge_f.view(b * t * self.sparse_full.shape[1], -1)
+        for layer in self.gnn_layers:
+            node_f = layer(node_f, edge_index=edge_index, edge_attr=edge_f)
+            edge_f = (node_f[src][:, None, :] * node_f[dst][:, :, None]).sum(dim=-1)
+        node_f = node_f.view(b, t, N_GRAPH_NODES, -1)
+        edge_f = edge_f.view(b, t, self.sparse_full.shape[1], -1)
+        # temporal_element, (hn, cn) = self.lstm(node_f[:, :, -1, :], (h_in, c_in))
+        # node_f, hn, cn = self.dense_temporal_layer(node_f, seq_lengths, h_in, c_in)
+        # edge_f = (node_f[src] * node_f[dst]).sum(dim=-1)
+        node_action = self.action_value(node_f[:, :, :N_NODES, :])
+        edge_action = self.action_value(edge_f[:, :, :N_ROADS * 2, :])
+        state_value = self.state_value(node_f[:, :, -1, :])
+
+        action_trade_get = self.action_trade_get(node_f[:, :, -1, :]).view((b, t, N_RESOURCES, self.n_players))
+        action_trade_give = self.action_trade_give(node_f[:, :, -1, :]).view((b, t, N_RESOURCES, self.n_players))
+
+        action_trade = TradeAction(give=action_trade_give, get=action_trade_get)
+
+        action_type = self.action_type_head(node_f[:, :, -1, :]).view((b, t, self.n_action_types, self.n_players))
+        # ['action_type', 'action_matrix', 'state_matrix', 'action_trade' 'state_trade', 'hn', 'cn']
+        return self.Output(action_type, edge_action, node_action, action_trade, state_value, hn, cn)
+
+    def sparse_feature_embedding(self, observation: GameState):
+        node_features = self.node_embed(observation.node_features)
+        edge_features = self.edge_embed(observation.edge_features)
+        face_features = self.face_embed(observation.face_features)
+        game_features = self.game_embed(observation.game_features)
+        node_f = torch.cat((
+            node_features,
+            face_features,
+            game_features), -2)
+        edge_f = edge_features
+        return node_f, edge_f
+
+    def dense_feature_embedding(self, observation: GameState):
         b, t = observation.node_features.shape[:2]
 
         # x_flat = observation.view(batch * seq, n * n, f)
@@ -220,7 +293,7 @@ class CoreNet(BaseNet):
 
         return obs_matrix
 
-    def action_value_heads(self, observation):
+    def dense_action_value_heads(self, observation):
         batch, seq, n, _, f = observation.shape
 
         x_flat = observation.view(batch * seq, n * n, f)
@@ -235,12 +308,12 @@ class CoreNet(BaseNet):
 
         return action_matrix, state_value
 
-    def temporal_layer(self,
-                       obs_matrix: T.Tensor,
-                       seq_lengths: T.Tensor,
-                       h_in: T.Tensor,
-                       c_in: T.Tensor
-                       ) -> Tuple[T.Tensor, T.Tensor, T.Tensor]:
+    def dense_temporal_layer(self,
+                             obs_matrix: T.Tensor,
+                             seq_lengths: T.Tensor,
+                             h_in: T.Tensor,
+                             c_in: T.Tensor
+                             ) -> Tuple[T.Tensor, T.Tensor, T.Tensor]:
         # try:
         #     packed_matrix = pack_padded_sequence(
         #         obs_matrix[:, :, -1, -1, :],
@@ -251,10 +324,7 @@ class CoreNet(BaseNet):
         # except RuntimeError:
         #     breakpoint()
         #     raise RuntimeError
-        try:
-            temporal_element, (hn, cn) = self.lstm(obs_matrix[:, :, -1, -1, :], (h_in, c_in))
-        except:
-            breakpoint()
+        temporal_element, (hn, cn) = self.lstm(obs_matrix[:, :, -1, -1, :], (h_in, c_in))
         # temporal_matrix, _ = pad_packed_sequence(packed_matrix, batch_first=True)
 
         # Add temporal matrix to all elements of observation matrix
@@ -423,9 +493,6 @@ class QNet(GameNet):
 
 
 class PPONet(GameNet):
-    keys = ['pi_type', 'pi_map', 'pi_trade', 'state_value', 'hn', 'cn']
-    Output = namedtuple('Output', keys)
-
     def __init__(self,
                  net_config,
                  batch_size=1,
@@ -438,43 +505,52 @@ class PPONet(GameNet):
 
         self.to(self.on_device)
 
-    def forward(self, transition: PPOTransition) -> Output:
+    def forward(self, transition: PPOTransition) -> NetOutput:
         core = self._core_net(transition)
         pi_type = core.action_type.softmax(-2)
-        pi_map = self.masked_softmax(core.action_matrix)
         pi_trade = TradeAction(give=core.action_trade.give.softmax(-2), get=core.action_trade.get.softmax(-2))
-        return self.Output(pi_type, pi_map, pi_trade, core.state_value, core.hn, core.cn)
+        if DENSE_FORWARD:
+            pi_map = self.masked_softmax(core.action_matrix)
+            raise NotImplementedError
+        else:
+            pi_road = core.action_road.softmax(-2)
+            pi_settle = core.action_settle.softmax(-2)
+        return NetOutput(SparsePi(pi_type, pi_settle, pi_road, pi_trade), core.state_value, core.hn, core.cn)
 
-    def masked_softmax(self, action_logits: Tensor) -> Tensor:
+    def dense_softmax(self, action_logits: Tensor) -> Tensor:
         b, s, n, _, f = action_logits.shape
         action_mask = self._core_net.action_mask[None, :, :, :, None].repeat(b, s, 1, 1, f).to(action_logits.device)
         z = torch.exp(action_logits) * action_mask
         sum_z = TensorUtils.nn_sum(z, [2, 3])
         sum_z[sum_z == 0] = 1
         action_probs = z / sum_z
-
-        # TODO: Correction for out of sequence states
-        # action_probs[action_probs.sum(-1) == 0] = 1 / action_probs.shape[-1]
-
+        if action_probs.isnan().any():
+            breakpoint()
         return action_probs
 
     @staticmethod
-    def get_pi(net_out: Output, i_am_player: Tensor | int):
+    def get_pi(net_out: NetOutput, i_am_player: Tensor | int):
         if isinstance(i_am_player, Tensor):
             i_am_player = i_am_player.unsqueeze(-1).unsqueeze(-1)
-            pi_type = torch.gather(net_out.pi_type, -1, i_am_player.expand(-1, -1, 3, -1)).squeeze(-1)
-            pi_map = torch.gather(net_out.pi_map, -1, i_am_player.unsqueeze(-1).expand(-1, -1, N_GRAPH_NODES, N_GRAPH_NODES, -1)).squeeze(-1)
+            pi_type = torch.gather(net_out.pi.type, -1, i_am_player.expand(-1, -1, 4, -1)).squeeze(-1)
+            # pi_map = torch.gather(net_out.pi_map, -1, i_am_player.unsqueeze(-1).expand(-1, -1, N_NODES, N_NODES, -1)).squeeze(-1)
             pi_trade = TradeAction(
-                give=torch.gather(net_out.pi_trade.give, -1, i_am_player.expand(-1, -1, 5, -1)).squeeze(-1),
-                get=torch.gather(net_out.pi_trade.get, -1, i_am_player.expand(-1, -1, 5, -1)).squeeze(-1),
+                give=torch.gather(net_out.pi.trade.give, -1, i_am_player.expand(-1, -1, 5, -1)).squeeze(-1),
+                get=torch.gather(net_out.pi.trade.get, -1, i_am_player.expand(-1, -1, 5, -1)).squeeze(-1),
             )
+            pi_road = torch.gather(net_out.pi.road, -1, i_am_player.expand(-1, -1, 144, -1)).squeeze(-1)
+            pi_settle = torch.gather(net_out.pi.settlement, -1, i_am_player.expand(-1, -1, 54, -1)).squeeze(-1)
+            # if pi_map.isnan().any():
+            #     breakpoint()
         elif isinstance(i_am_player, int):
-            pi_type = net_out.pi_type[0, 0, :, i_am_player]
+            pi_type = net_out.pi.type[:1, :1, :, i_am_player]
             pi_trade = TradeAction(
-                give=net_out.pi_trade.give[0, 0, :, i_am_player],
-                get=net_out.pi_trade.get[0, 0, :, i_am_player]
+                give=net_out.pi.trade.give[:1, :1, :, i_am_player],
+                get=net_out.pi.trade.get[:1, :1, :, i_am_player]
             )
-            pi_map = net_out.pi_map[0, 0, :N_NODES, :N_NODES, i_am_player]
+            pi_road = net_out.pi.road[:1, :1, :, i_am_player]
+            pi_settle = net_out.pi.settlement[:1, :1, :, i_am_player]
+            # pi_map = net_out.pi_map[:1, :1, :N_NODES, :N_NODES, i_am_player]
         else:
             raise TypeError
-        return Pi(type=pi_type, trade=pi_trade, map=pi_map)
+        return SparsePi(type=pi_type, trade=pi_trade, road=pi_road, settlement=pi_settle)

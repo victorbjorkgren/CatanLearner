@@ -2,7 +2,7 @@ from dataclasses import dataclass, field
 
 from torch import Tensor
 
-from Learner.Utility.ActionTypes import BaseAction
+from Learner.Utility.ActionTypes import BaseAction, SparsePi
 from Learner.Utility.Utils import Holders
 
 
@@ -16,6 +16,7 @@ class GameState(Holders):
 @dataclass
 class PPOActionPack(Holders):
     action: BaseAction = field(metadata={'not_stackable': True})
+    masks: SparsePi
     log_prob: Tensor
     value: Tensor
     lstm_h: Tensor
@@ -53,3 +54,10 @@ class NetInput(Holders):
     lstm_h: Tensor
     lstm_c: Tensor
 
+
+@dataclass
+class NetOutput(Holders):
+    pi: SparsePi
+    state_value: Tensor
+    hn: Tensor
+    cn: Tensor

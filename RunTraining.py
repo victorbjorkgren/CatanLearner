@@ -1,16 +1,18 @@
-from collections import deque
 import threading
+import traceback
+from collections import deque
+from typing import Dict
 
+from torch import Tensor
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
 from Environment import Game
 from Learner.AgentTracker import AgentTracker
-from Learner.Agents import QAgent
 from Learner.Agents.PPOAgent import PPOAgent
-from Learner.Nets import GameNet, PPONet
-from Learner.PrioReplayBuffer import PrioReplayBuffer, OnDiskBuffer, InMemBuffer
-from Learner.Trainer import QTrainer, PPOTrainer
+from Learner.Nets import PPONet
+from Learner.PrioReplayBuffer import InMemBuffer
+from Learner.Trainer import PPOTrainer
 from Learner.constants import *
 
 writer = SummaryWriter()
@@ -74,14 +76,24 @@ agent_tracker.load_contestants()
 game.register_agents(agent_list)
 game.reset()
 
+def write_stats(stats: Dict):
+    for key, value in stats.items():
+        if isinstance(value, Tensor):
+            writer.add_histogram(key, value, global_step=trainer.tick_iter)
+        elif isinstance(value, float | int):
+            writer.add_scalar(key, value, global_step=trainer.tick_iter)
+        else:
+            raise TypeError(f'Unexpected type {type(value)} to print to tensorboard')
+
 
 def learner_loop():
     while not stop_event.is_set():
-        td_loss = trainer.tick()
+        td_loss, stats = trainer.tick()
         td_loss_hist.append(td_loss)
-        td_loss_mean = sum(td_loss_hist) / max(1, len(td_loss_hist))
-        writer.add_scalar('TD Loss smooth', td_loss_mean, trainer.tick_iter)
+        # td_loss_mean = sum(td_loss_hist) / max(1, len(td_loss_hist))
+        writer.add_scalar('TD Loss smooth', sum(td_loss_hist) / max(1, len(td_loss_hist)), trainer.tick_iter)
         writer.add_scalar('TD Loss', td_loss, trainer.tick_iter)
+        write_stats(stats)
 
 
 def actor_loop():
@@ -93,6 +105,8 @@ def actor_loop():
         current_player = game.current_player
         action = game.current_agent.sample_action(observation, i_am_player=current_player)
         reward, done, succeeded = game.step(action)
+        game.player_agents[current_player].update_score(reward)
+        reward += game.players[current_player].flush_reward()
         game.player_agents[current_player].update_reward(reward, done, game, current_player)
 
         # On episode termination
@@ -104,6 +118,7 @@ def actor_loop():
             writer.add_scalar('TitanLastScore', titan.episode_score, game.episode)
             writer.add_scalar('TitanAvgScore', titan.avg_score, game.episode)
             writer.add_scalar('TitanBeatTime', titan.avg_beat_time, game.episode)
+            writer.add_scalar('TitanWinMean', titan.mean_win, game.episode)
             writer.flush()
             for ii in range(N_PLAYERS):
                 game.player_agents[ii].signal_episode_done(ii)
@@ -114,10 +129,10 @@ def actor_loop():
 
         iterator.set_postfix_str(
             f"Ep: {game.episode}-{int(game.turn)}, "
-            f"TD Loss: {td_loss_mean:.3e} (tick {trainer.tick_iter:d}), "
+            f"TD Loss: {sum(td_loss_hist) / max(1, len(td_loss_hist)):.3e} (tick {trainer.tick_iter:d}), "
             f"Score: {[int(player.points) for player in game.players]}, "
             f"ScoreHist: {[agent.avg_score for agent in game.player_agents]}, "
-            f"WinHist: {[agent.sum_win for agent in game.player_agents]}, "
+            f"WinMean: {[f'{100*agent.mean_win:.0f}' for agent in game.player_agents]}, "
             f"AvgBeatTime: {[int(agent.avg_beat_time) for agent in game.player_agents]}, "
             f"Players: {[agent for agent in game.player_agents]}"
         )
@@ -134,6 +149,8 @@ def learner_worker():
     try:
         learner_loop()
     except Exception as e:
+        stack_trace = traceback.format_exc()
+        print(f"EXCEPTION STACK TRACE:{stack_trace}")
         print('EXCEPTION IN LEARNER LOOP: ', e)
     finally:
         stop_event.set()
@@ -143,6 +160,8 @@ def actor_worker():
     try:
         actor_loop()
     except Exception as e:
+        stack_trace = traceback.format_exc()
+        print(f"EXCEPTION STACK TRACE:{stack_trace}")
         print('EXCEPTION IN ACTOR LOOP: ', e)
     finally:
         stop_event.set()
