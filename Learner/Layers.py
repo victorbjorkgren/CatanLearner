@@ -7,27 +7,28 @@ class MLP(nn.Module):
     def __init__(self, in_features: int, out_features: int, activated_out: bool = False, feature_dim: int = -1,
                  residual: bool = False) -> None:
         super(MLP, self).__init__()
-        self.final = activated_out
+        self.activated_out = activated_out
         assert feature_dim in [-1, 1]
         self.feature_dim = feature_dim
         hidden = max(in_features, out_features)
         self.l1 = nn.Linear(in_features, hidden)
         self.l2 = nn.Linear(hidden, out_features)
-        self.act = nn.LeakyReLU(.01)
+        # self.act = nn.LeakyReLU(.01)
+        self.act = nn.GELU()
         self.residual = residual
 
-        if self.final:
-            self.mlp = nn.Sequential(*[
-                self.l1,
-                self.act,
-                self.l2
-            ])
-        else:
+        if self.activated_out:
             self.mlp = nn.Sequential(*[
                 self.l1,
                 self.act,
                 self.l2,
                 self.act
+            ])
+        else:
+            self.mlp = nn.Sequential(*[
+                self.l1,
+                self.act,
+                self.l2
             ])
 
     def forward(self, x: T.Tensor) -> T.Tensor:
