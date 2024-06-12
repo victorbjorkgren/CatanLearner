@@ -639,6 +639,9 @@ class TensorUtils:
         else:
             return tensor
 
+    @staticmethod
+    def signed_log(tensor):
+        return tensor.sign() * torch.log(tensor.abs() + 1.)
 
 class LinearSchedule:
     """Linear schedule, for changing constants during agent training."""

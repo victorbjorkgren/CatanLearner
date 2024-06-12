@@ -13,6 +13,7 @@ from torch_geometric.utils.convert import to_networkx
 from Learner.Agents import BaseAgent
 from Learner.Utility.ActionTypes import BaseAction, BuildAction, TradeAction, NoopAction, SettlementAction, RoadAction
 from Learner.Utility.DataTypes import GameState
+from Learner.Utility.Utils import TensorUtils
 from Learner.constants import LATENT_REWARD
 from .Board import Board
 from .Player import Player
@@ -72,6 +73,11 @@ class Game:
             edge_x[road_mask, -1] = 1
         # node_x = T.cat((node_x, player_states.repeat((node_x.shape[0], 1))), dim=1)
         # edge_x = T.cat((edge_x, player_states.repeat((edge_x.shape[0], 1))), dim=1)
+        
+        node_x = TensorUtils.signed_log(node_x)
+        edge_x = TensorUtils.signed_log(edge_x)
+        face_x = TensorUtils.signed_log(face_x)
+        game_x = TensorUtils.signed_log(game_x)
 
         return GameState(node_x[None, None, ...], edge_x[None, None, ...], face_x[None, None, ...], game_x[None, None, ...])
 
