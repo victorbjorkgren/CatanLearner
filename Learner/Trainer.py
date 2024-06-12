@@ -53,6 +53,20 @@ class Trainer:
 
         self.tick_iter += 1
 
+        # Sometimes print weight info
+        if self.tick_iter % 10 == 2:
+            print('Print time')
+            for name, module in self.net.named_modules():
+                print(name)
+                if hasattr(module, 'weight') and module.weight is not None:
+                    weight_max = T.max(module.weight).item()
+                    if module.weight.grad is not None:
+                        grad_max = T.max(module.weight.grad).item()
+                    else:
+                        grad_max = 0.
+                    print(f"{name}: Max weight = {weight_max:.4e} - Max grad = {grad_max:.4e}")
+
+
         return td_loss, stats
 
     def find_start_tick(self):
