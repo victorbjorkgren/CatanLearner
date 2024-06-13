@@ -51,10 +51,8 @@ class Trainer:
         if self.tick_iter % SAVE_CHECKPOINT_NET_INTERVAL == 0:
             self.save('checkpoint')
 
-        self.tick_iter += 1
-
         # Sometimes print weight info
-        if self.tick_iter % 10 == 2:
+        if self.tick_iter % 50 == 1:
             print('Print time')
             for name, module in self.net.named_modules():
                 print(name)
@@ -66,6 +64,7 @@ class Trainer:
                         grad_max = 0.
                     print(f"{name}: Max weight = {weight_max:.4e} - Max grad = {grad_max:.4e}")
 
+        self.tick_iter += 1
 
         return td_loss, stats
 
