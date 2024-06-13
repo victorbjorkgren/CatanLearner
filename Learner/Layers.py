@@ -4,7 +4,7 @@ import torch.nn.functional as F
 
 
 class MLP(nn.Module):
-    def __init__(self, in_features: int, out_features: int, activated_out: bool = False, feature_dim: int = -1,
+    def __init__(self, in_features: int, out_features: int, activated_out: bool = True, feature_dim: int = -1,
                  residual: bool = False) -> None:
         super(MLP, self).__init__()
         self.activated_out = activated_out

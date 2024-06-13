@@ -150,13 +150,13 @@ class CoreNet(BaseNet):
         self.face_embed = MLP(n_face_attr, n_embed, residual=False)
         self.game_embed = MLP(n_game_attr, n_embed, residual=False)
 
-        self.action_value = MLP(n_embed, n_output, activated_out=True)
-        self.state_value = MLP(n_embed, n_output, activated_out=True)
+        self.action_value = MLP(n_embed, n_output, activated_out=False)
+        self.state_value = MLP(n_embed, n_output, activated_out=False)
 
-        self.action_trade_give = MLP(n_embed, N_RESOURCES * self.n_players, activated_out=True)
-        self.action_trade_get = MLP(n_embed, N_RESOURCES * self.n_players, activated_out=True)
-        self.state_trade_give = MLP(n_embed, N_RESOURCES * self.n_players, activated_out=True)
-        self.state_trade_get = MLP(n_embed, N_RESOURCES * self.n_players, activated_out=True)
+        self.action_trade_give = MLP(n_embed, N_RESOURCES * self.n_players, activated_out=False)
+        self.action_trade_get = MLP(n_embed, N_RESOURCES * self.n_players, activated_out=False)
+        self.state_trade_give = MLP(n_embed, N_RESOURCES * self.n_players, activated_out=False)
+        self.state_trade_get = MLP(n_embed, N_RESOURCES * self.n_players, activated_out=False)
 
         self.lstm = nn.LSTM(n_embed, n_embed, batch_first=True)
 
@@ -178,7 +178,7 @@ class CoreNet(BaseNet):
             self.n_action_types = len(sparse_type_mapping)
             self.edge_padding = torch.zeros(self.sparse_full.shape[1], n_embed)
 
-        self.action_type_head = MLP(n_embed, self.n_action_types * self.n_players, activated_out=True)
+        self.action_type_head = MLP(n_embed, self.n_action_types * self.n_players, activated_out=False)
 
         self.state_matrix = self.state_matrix.to(self.on_device)
         self.full_mask = self.full_mask.to(self.on_device)
