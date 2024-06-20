@@ -2,9 +2,9 @@ import torch
 from torch import Tensor
 from torch.distributions import Categorical
 
-from Environment.constants import N_GRAPH_NODES, N_NODES
+from Environment.constants import N_GRAPH_NODES, N_NODES, N_ROADS, N_RESOURCES
 from Learner.Utility.ActionTypes import BaseAction, TradeAction, BuildAction, NoopAction, Pi, \
-    SparsePi, RoadAction, SettlementAction, sparse_type_mapping
+    SparsePi, RoadAction, SettlementAction, sparse_type_mapping, FlatPi
 
 
 # class CatanActionSampler:
@@ -25,7 +25,7 @@ from Learner.Utility.ActionTypes import BaseAction, TradeAction, BuildAction, No
 #         action_type = dense_type_mapping[action_ind.item()]
 #
 #         if action_type == BuildAction:
-#             return BuildAction(mat_index=self.sample_2d_map())
+#             return BuildAction(trade_index=self.sample_2d_map())
 #         elif action_type == TradeAction:
 #             give = self.trade_give_dist.sample()
 #             get = self.trade_get_dist.sample()
@@ -53,7 +53,7 @@ from Learner.Utility.ActionTypes import BaseAction, TradeAction, BuildAction, No
 #                         action_type = dense_type_mapping.inverse[type(action[i][j])]
 #                         action_ind[i, j] = action_type
 #                         if action_type == BuildAction:
-#                             build_mat_index[i, j, :] = action[i][j].mat_index
+#                             build_mat_index[i, j, :] = action[i][j].trade_index
 #                         elif action_type == TradeAction:
 #                             trade_gives[i, j] = action[i][j].give
 #                             trade_gets[i, j] = action[i][j].get
@@ -79,7 +79,7 @@ from Learner.Utility.ActionTypes import BaseAction, TradeAction, BuildAction, No
 #             type_log_p = self.type_dist.log_prob(action_ind)
 #             if action_type == BuildAction:
 #                 action: BuildAction
-#                 action_log_p = self.logprob_2d_map(action.mat_index)
+#                 action_log_p = self.logprob_2d_map(action.trade_index)
 #             elif action_type == TradeAction:
 #                 action: TradeAction
 #                 trade_give_log_p = self.trade_give_dist.log_prob(action.give)
@@ -112,12 +112,12 @@ from Learner.Utility.ActionTypes import BaseAction, TradeAction, BuildAction, No
 #         sampled_coordinate = divmod(sampled_index.item(), self.build_size)
 #         return torch.tensor(sampled_coordinate)
 #
-#     def logprob_2d_map(self, mat_index: Tensor):
-#         if mat_index.ndim == 1:
-#             row, col = mat_index
+#     def logprob_2d_map(self, trade_index: Tensor):
+#         if trade_index.ndim == 1:
+#             row, col = trade_index
 #         else:
-#             row = mat_index[..., 0]
-#             col = mat_index[..., 1]
+#             row = trade_index[..., 0]
+#             col = trade_index[..., 1]
 #         index = row * self.build_size + col
 #         return self.build_dist.log_prob(index)
 
@@ -231,3 +231,23 @@ class SparseCatanActionSampler:
         settle_entropy = settle_probs * self.settle_dist.entropy()
 
         return action_entropy + trade_entropy + road_entropy + settle_entropy
+
+
+class FlatCatanActionSampler:
+    def __init__(self, pi: FlatPi):
+        assert ~pi.index.isnan().any()
+        assert pi.index.ndim == 4 and pi.index.shape[-1] == 1
+        pi = pi.index.squeeze(-1)
+        pi[(pi.sum(-1, keepdim=True) == 0).expand(-1, -1, 224)] = 1 / 224
+        self.device = pi.device
+        self.dist = Categorical(probs=pi)
+
+    def sample(self):
+        sample = self.dist.sample()
+        return FlatPi.i_to_action(sample), sample
+
+    def log_prob(self, action: Tensor):
+        return self.dist.log_prob(action)
+
+    def entropy(self):
+        return self.dist.entropy()

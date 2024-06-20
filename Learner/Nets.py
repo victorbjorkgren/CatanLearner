@@ -15,7 +15,7 @@ from torch_geometric.nn import GATv2Conv, GINEConv
 
 from Environment import Game
 from Environment.constants import N_RESOURCES, N_GRAPH_NODES, N_NODES, N_ROADS
-from Learner.Utility.ActionTypes import TradeAction, Pi, sparse_type_mapping, SparsePi
+from Learner.Utility.ActionTypes import TradeAction, Pi, sparse_type_mapping, SparsePi, FlatPi
 from Learner.Utility.DataTypes import PPOTransition, NetInput, GameState, NetOutput
 from Learner.Utility.Utils import TensorUtils, Holders
 from Learner.Layers import MLP, PowerfulLayer, MultiHeadAttention
@@ -70,7 +70,8 @@ class BaseNet(nn.Module):
 
 
 class CoreNet(BaseNet):
-    keys = ['action_type', 'action_road', 'action_settle', 'action_trade', 'state_value', 'hn', 'cn']
+    # keys = ['action_type', 'action_road', 'action_settle', 'action_trade', 'state_value', 'hn', 'cn']
+    keys = ['action_index', 'state_value', 'hn', 'cn']
     Output = namedtuple('Output', keys)
 
     def __init__(self,
@@ -169,7 +170,8 @@ class CoreNet(BaseNet):
             # self.n_action_types = len(dense_type_mapping)
             raise NotImplementedError
         else:
-            self.forward_func = self.sparse_forward
+            self.forward_func = self.flat_forward
+            self.noop_head = MLP(n_embed, 1, activated_out=False)
             n_heads = 2
             assert n_embed % n_heads == 0
             self.gnn_layers = nn.ModuleList([GATv2Conv(n_embed, n_embed, edge_dim=n_embed, n_heads=n_heads) for _ in range(n_power_layers)])
@@ -249,9 +251,64 @@ class CoreNet(BaseNet):
         # temporal_element, (hn, cn) = self.lstm(node_f[:, :, -1, :], (h_in, c_in))
         # node_f, hn, cn = self.dense_temporal_layer(node_f, seq_lengths, h_in, c_in)
         # edge_f = (node_f[src] * node_f[dst]).sum(dim=-1)
+
+        state_value = self.state_value(node_f[:, :, -1, :])
+        action_type, edge_action, node_action, action_trade = self.nestled_heads(node_f, edge_f)
+        return self.Output(action_type, edge_action, node_action, action_trade, state_value, hn, cn)
+
+    def flat_forward(self, core_input: NetInput) -> Output:
+        observation = core_input.state
+        seq_lengths = core_input.seq_lens
+        h_in = core_input.lstm_h[:1, :, :]
+        c_in = core_input.lstm_c[:1, :, :]
+        # assert len(observation.shape) == 5, "QNet wants [B, T, N, N, F]"
+        b, t = observation.node_features.shape[:2]
+
+        observation = observation.to(self.on_device)
+        h_in = h_in.to(self.on_device)
+        c_in = c_in.to(self.on_device)
+        hn, cn = h_in, c_in
+
+        node_f, edge_f = self.sparse_feature_embedding(observation)
+        edge_index = torch.cat([(self.sparse_full.max() + 1) * n + self.sparse_full for n in range(b * t)], dim=1).to(
+            self.on_device)
+        src, dst = edge_index
+        edge_pad = self.edge_padding.repeat(b, t, 1, 1).to(self.on_device)
+        edge_pad[:, :, :N_ROADS * 2, :] = edge_f
+        edge_f = edge_pad
+        node_f = node_f.view(b * t * N_GRAPH_NODES, -1)
+        edge_f = edge_f.view(b * t * self.sparse_full.shape[1], -1)
+        for layer in self.gnn_layers:
+            node_f = layer(node_f, edge_index=edge_index, edge_attr=edge_f)
+            edge_f = (node_f[src][:, None, :] * node_f[dst][:, :, None]).sum(dim=-1)
+        node_f = node_f.view(b, t, N_GRAPH_NODES, -1)
+        edge_f = edge_f.view(b, t, self.sparse_full.shape[1], -1)
+        # temporal_element, (hn, cn) = self.lstm(node_f[:, :, -1, :], (h_in, c_in))
+        # node_f, hn, cn = self.dense_temporal_layer(node_f, seq_lengths, h_in, c_in)
+        # edge_f = (node_f[src] * node_f[dst]).sum(dim=-1)
+
+        state_value = self.state_value(node_f[:, :, -1, :])
+        action_pi = self.flat_heads(node_f, edge_f)
+        return self.Output(action_pi, state_value, hn, cn)
+
+    def flat_heads(self, node_f, edge_f) -> FlatPi:
+        b, t = node_f.shape[:2]
         node_action = self.action_value(node_f[:, :, :N_NODES, :])
         edge_action = self.action_value(edge_f[:, :, :N_ROADS * 2, :])
-        state_value = self.state_value(node_f[:, :, -1, :])
+
+        action_trade_get = self.action_trade_get(node_f[:, :, -1, :]).view((b, t, N_RESOURCES, self.n_players))
+        action_trade_give = self.action_trade_give(node_f[:, :, -1, :]).view((b, t, N_RESOURCES, self.n_players))
+
+        action_trade = TradeAction(give=action_trade_give, get=action_trade_get)
+
+        action_noop = self.noop_head(node_f[:, :, -1, :])
+        action_pi = FlatPi.stack_parts(road=edge_action, settle=node_action, trade=action_trade, noop=action_noop)
+        return action_pi
+
+    def nestled_heads(self, node_f, edge_f):
+        b, t = node_f.shape[:2]
+        node_action = self.action_value(node_f[:, :, :N_NODES, :])
+        edge_action = self.action_value(edge_f[:, :, :N_ROADS * 2, :])
 
         action_trade_get = self.action_trade_get(node_f[:, :, -1, :]).view((b, t, N_RESOURCES, self.n_players))
         action_trade_give = self.action_trade_give(node_f[:, :, -1, :]).view((b, t, N_RESOURCES, self.n_players))
@@ -260,7 +317,7 @@ class CoreNet(BaseNet):
 
         action_type = self.action_type_head(node_f[:, :, -1, :]).view((b, t, self.n_action_types, self.n_players))
         # ['action_type', 'action_matrix', 'state_matrix', 'action_trade' 'state_trade', 'hn', 'cn']
-        return self.Output(action_type, edge_action, node_action, action_trade, state_value, hn, cn)
+        return action_type, edge_action, node_action, action_trade
 
     def sparse_feature_embedding(self, observation: GameState):
         node_features = self.node_embed(observation.node_features)
@@ -273,6 +330,12 @@ class CoreNet(BaseNet):
             game_features), -2)
         edge_f = edge_features
         return node_f, edge_f
+
+    def flat_feature_embedding(self, observation: GameState):
+        node_features = self.node_embed(observation.node_features)
+        edge_features = self.edge_embed(observation.edge_features)
+        face_features = self.face_embed(observation.face_features)
+        game_features = self.game_embed(observation.game_features)
 
     def dense_feature_embedding(self, observation: GameState):
         b, t = observation.node_features.shape[:2]
@@ -507,15 +570,17 @@ class PPONet(GameNet):
 
     def forward(self, transition: PPOTransition) -> NetOutput:
         core = self._core_net(transition)
-        pi_type = core.action_type.softmax(-2)
-        pi_trade = TradeAction(give=core.action_trade.give.softmax(-2), get=core.action_trade.get.softmax(-2))
-        if DENSE_FORWARD:
-            pi_map = self.masked_softmax(core.action_matrix)
-            raise NotImplementedError
-        else:
-            pi_road = core.action_road.softmax(-2)
-            pi_settle = core.action_settle.softmax(-2)
-        return NetOutput(SparsePi(pi_type, pi_settle, pi_road, pi_trade), core.state_value, core.hn, core.cn)
+        pi = core.action_index.index.softmax(-2)
+        return NetOutput(FlatPi(pi), core.state_value, core.hn, core.cn)
+        # pi_type = core.action_type.softmax(-2)
+        # pi_trade = TradeAction(give=core.action_trade.give.softmax(-2), get=core.action_trade.get.softmax(-2))
+        # if DENSE_FORWARD:
+        #     pi_map = self.masked_softmax(core.action_matrix)
+        #     raise NotImplementedError
+        # else:
+        #     pi_road = core.action_road.softmax(-2)
+        #     pi_settle = core.action_settle.softmax(-2)
+        # return NetOutput(SparsePi(pi_type, pi_settle, pi_road, pi_trade), core.state_value, core.hn, core.cn)
 
     def dense_softmax(self, action_logits: Tensor) -> Tensor:
         b, s, n, _, f = action_logits.shape

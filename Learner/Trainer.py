@@ -9,8 +9,8 @@ import torch as T
 import torch.nn as nn
 import torch.optim as optim
 
-from Learner.Utility.ActionTypes import SparsePi, TradeAction
-from Learner.Utility.CustomDistributions import SparseCatanActionSampler
+from Learner.Utility.ActionTypes import SparsePi, TradeAction, FlatPi
+from Learner.Utility.CustomDistributions import SparseCatanActionSampler, FlatCatanActionSampler
 from Learner.Utility.DataTypes import PPOTransition, NetInput, NetOutput
 from Learner.constants import PPO_ENTROPY_COEF, PPO_VALUE_COEF, SAVE_LATEST_NET_INTERVAL, SAVE_CHECKPOINT_NET_INTERVAL
 from Learner.Loss import Loss
@@ -215,7 +215,7 @@ class PPOTrainer(Trainer):
         )
 
     def proximal_policy_loss(self, pi_logprobs, behavior_logprob, advantages):
-        ratio = torch.exp(pi_logprobs.squeeze(-1) - behavior_logprob)
+        ratio = torch.exp(pi_logprobs - behavior_logprob.squeeze(-1))
         clipped_ratios = torch.clamp(
             ratio,
             1.0 - self.clip_epsilon(self.tick_iter),
@@ -279,17 +279,23 @@ class PPOTrainer(Trainer):
 
 
         net_output = self.net(sample['transition'].as_net_input)
-        self.apply_masks(net_output, masks)
-        pi = self.net.get_pi(net_output, i_am_player)
+        # Mask, choose correct player and renormalize
+        pi = net_output.pi.index * masks.index
+        pi = torch.gather(pi, -1, i_am_player[:,:,None,None].expand(-1,-1,224,-1)).squeeze(-1)
+        pi = pi / pi.sum(-1, keepdims=True).clamp_min(1e-9)
+        pi = FlatPi(pi.unsqueeze(-1))
 
-        pi_dist = SparseCatanActionSampler(pi)
+        # self.apply_masks(net_output, masks)
+        # pi = self.net.get_pi(net_output, i_am_player)
+
+        pi_dist = FlatCatanActionSampler(pi)
 
         # Policy Loss
         pi_logprob = pi_dist.log_prob(transition.action_pack.action)
         policy_loss = self.proximal_policy_loss(pi_logprob, transition.action_pack.log_prob, advantage)
 
         # Value Loss
-        value = net_output.state_value.squeeze(-1)
+        # value = net_output.state_value.squeeze(-1)
         value_loss = 0.5 * torch.square(returns - value)
 
         # Entropy Loss
