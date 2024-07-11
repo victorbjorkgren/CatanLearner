@@ -268,15 +268,13 @@ class PPOTrainer(Trainer):
 
         value = TensorUtils.signed_log(value)
 
-        assert done.all().item(), 'Currently only handles done terminated sequences'
+        assert done.all().item(), 'Currently only handles terminated sequences'
         advantage, returns = TensorUtils.advantage_estimation(reward, value, done, transition.seq_lens, self.gamma)
         # advantage, returns = TensorUtils.advantage_estimation(reward, torch.zeros_like(value), done, transition.seq_lens, self.gamma)
         # advantage = TensorUtils.propagate_rewards(self.gamma, reward)
         # returns = advantage.clone()
         stats['advantage'] = advantage.clone().detach().cpu()
         stats['returns'] = returns.clone().detach().cpu()
-
-
 
         net_output = self.net(sample['transition'].as_net_input)
         # Mask, choose correct player and renormalize

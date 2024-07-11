@@ -190,7 +190,7 @@ class Game:
                     self.give_resource(hit)
                 good_place_to_start = self.players[self.current_player].hand >= torch.tensor([1, 1, 0, 1, 1])
                 if good_place_to_start.all():
-                    reward += .1
+                    reward += GOOD_START_REWARD
 
                 # Check if first turn has ended
                 if self.current_player == (self.n_players - 1):
