@@ -237,6 +237,7 @@ class FlatCatanActionSampler:
     def __init__(self, pi: FlatPi):
         assert ~pi.index.isnan().any()
         assert pi.index.ndim == 4 and pi.index.shape[-1] == 1
+
         pi = pi.index.squeeze(-1)
         pi[(pi.sum(-1, keepdim=True) == 0).expand(-1, -1, 224)] = 1 / 224
         self.device = pi.device

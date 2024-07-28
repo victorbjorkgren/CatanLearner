@@ -180,7 +180,7 @@ class CoreNet(BaseNet):
             self.n_action_types = len(sparse_type_mapping)
             self.edge_padding = torch.zeros(self.sparse_full.shape[1], n_embed)
 
-        self.action_type_head = MLP(n_embed, self.n_action_types * self.n_players, activated_out=False)
+        # self.action_type_head = MLP(n_embed, self.n_action_types * self.n_players, activated_out=False)
 
         self.state_matrix = self.state_matrix.to(self.on_device)
         self.full_mask = self.full_mask.to(self.on_device)
@@ -570,7 +570,8 @@ class PPONet(GameNet):
 
     def forward(self, transition: PPOTransition) -> NetOutput:
         core = self._core_net(transition)
-        pi = core.action_index.index.softmax(-2)
+        # pi = core.action_index.index.softmax(-2)
+        pi = TensorUtils.stable_softmax(core.action_index.index, dim=-2)
         return NetOutput(FlatPi(pi), core.state_value, core.hn, core.cn)
         # pi_type = core.action_type.softmax(-2)
         # pi_trade = TradeAction(give=core.action_trade.give.softmax(-2), get=core.action_trade.get.softmax(-2))
@@ -586,11 +587,9 @@ class PPONet(GameNet):
         b, s, n, _, f = action_logits.shape
         action_mask = self._core_net.action_mask[None, :, :, :, None].repeat(b, s, 1, 1, f).to(action_logits.device)
         z = torch.exp(action_logits) * action_mask
-        sum_z = TensorUtils.nn_sum(z, [2, 3])
-        sum_z[sum_z == 0] = 1
+        sum_z = TensorUtils.nn_sum(z, [2, 3]).clamp_min(1e-9)
+        # sum_z[sum_z == 0] = 1
         action_probs = z / sum_z
-        if action_probs.isnan().any():
-            breakpoint()
         return action_probs
 
     @staticmethod

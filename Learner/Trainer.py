@@ -215,7 +215,8 @@ class PPOTrainer(Trainer):
         )
 
     def proximal_policy_loss(self, pi_logprobs, behavior_logprob, advantages):
-        ratio = torch.exp(pi_logprobs - behavior_logprob.squeeze(-1))
+        diff = pi_logprobs - behavior_logprob.squeeze(-1)
+        ratio = torch.exp(diff.clamp(min=-20, max=20))
         clipped_ratios = torch.clamp(
             ratio,
             1.0 - self.clip_epsilon(self.tick_iter),
@@ -224,22 +225,22 @@ class PPOTrainer(Trainer):
         policy_loss = torch.min(ratio * advantages.detach(), clipped_ratios * advantages.detach())
         return policy_loss
 
-    def apply_masks(self, net_output: NetOutput, masks: SparsePi):
-        for field in fields(net_output.pi):
-            if field.name == 'trade':
-                value = net_output.pi.trade.give
-                value = value * masks.trade.give.unsqueeze(-1)
-                value[(value == 0).all(-2).squeeze(-1)] = 1.
-                value = value / value.sum(dim=-2, keepdim=True)
-                value[value.isnan()] = 1 / value.shape[2]
-                net_output.pi.trade.give = value
-            else:
-                value = getattr(net_output.pi, field.name)
-                value = value * getattr(masks, field.name).unsqueeze(-1)
-                value[(value == 0).all(-2).squeeze(-1)] = 1.
-                value = value / value.sum(dim=-2, keepdim=True)
-                value[value.isnan()] = 1 / value.shape[2]
-                setattr(net_output.pi, field.name, value)
+    # def apply_masks(self, net_output: NetOutput, masks: SparsePi):
+    #     for field in fields(net_output.pi):
+    #         if field.name == 'trade':
+    #             value = net_output.pi.trade.give
+    #             value = value * masks.trade.give.unsqueeze(-1)
+    #             value[(value == 0).all(-2).squeeze(-1)] = 1.
+    #             value = value / value.sum(dim=-2, keepdim=True)
+    #             value[value.isnan()] = 1 / value.shape[2]
+    #             net_output.pi.trade.give = value
+    #         else:
+    #             value = getattr(net_output.pi, field.name)
+    #             value = value * getattr(masks, field.name).unsqueeze(-1)
+    #             value[(value == 0).all(-2).squeeze(-1)] = 1.
+    #             value = value / value.sum(dim=-2, keepdim=True)
+    #             value[value.isnan()] = 1 / value.shape[2]
+    #             setattr(net_output.pi, field.name, value)
 
         # pi_type = net_output.pi.type * masks.type.unsqueeze(-1)
         # pi_road = net_output.pi.road * masks.road.unsqueeze(-1)
@@ -324,3 +325,20 @@ class PPOTrainer(Trainer):
         self.optimizer.step()
 
         return loss.item(), stats
+
+class SACTrainer(Trainer):
+    def __init__(self,
+                 net: PPONet,
+                 buffer: PrioReplayBuffer,
+                 batch_size: int,
+                 gamma: float,
+                 learning_rate: float,
+                 reward_scale: float
+                 ):
+        super().__init__('SAC_Agent', buffer, batch_size, gamma, net)
+        self.reward_scale = reward_scale
+        self.optimizer = optim.AdamW(self.net.parameters(), lr=learning_rate, weight_decay=1e-5)
+
+
+    def train(self):
+        pass

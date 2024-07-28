@@ -68,38 +68,12 @@ class PPOAgent(BaseAgent):
                 NetInput(state, T.Tensor([1]), self.h0, self.c0)
             )
             self.h0, self.c0 = net_out.hn, net_out.cn
-
-        # pi = self.net.get_pi(net_out, i_am_player)
+            assert ~net_out.pi.index.isnan().any()
 
         # Apply masks
         net_out.pi.index *= mask.index
-        net_out.pi.index /= net_out.pi.index.sum(dim=-2, keepdim=True)
-        # pi.settlement *= settle_mask
-        # pi.road *= road_mask
-        # pi.trade.give *= trade_mask
-
-        # type_mask = torch.ones_like(pi.type)
-        # type_mask[:, :, sparse_type_mapping.inverse[NoopAction]] *= no_op_mask
-        # if pi.trade.give.nonzero().numel() == 0:
-        #     trade_type_ind = sparse_type_mapping.inverse[TradeAction]
-        #     type_mask[:, :, trade_type_ind] = 0
-        #     pi.trade.give += 1 / pi.trade.give.numel()
-        # if pi.road.nonzero().numel() == 0:
-        #     road_type_ind = sparse_type_mapping.inverse[RoadAction]
-        #     type_mask[:, :, road_type_ind] = 0
-        #     pi.road += 1 / pi.road.numel()
-        # if pi.settlement.nonzero().numel() == 0:
-        #     settle_type_ind = sparse_type_mapping.inverse[SettlementAction]
-        #     type_mask[:, :, settle_type_ind] = 0
-        #     pi.settlement += 1 / pi.settlement.numel()
-        #
-        # pi.type *= type_mask
-
-        # Re-normalize probs
-        # pi.settlement = pi.settlement / pi.settlement.sum(-1)
-        # pi.road = pi.road / pi.road.sum(-1)
-        # pi.trade.give = pi.trade.give / pi.trade.give.sum(-1)
-        # pi.type = pi.type / pi.type.sum(-1)
+        net_out.pi.index /= net_out.pi.index.sum(dim=-2, keepdim=True).clamp_min(1e-9)
+        assert ~net_out.pi.index.isnan().any()
 
         # Sample
         sampler = FlatCatanActionSampler(net_out.pi)

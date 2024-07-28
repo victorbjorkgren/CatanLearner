@@ -643,6 +643,15 @@ class TensorUtils:
     def signed_log(tensor):
         return tensor.sign() * torch.log(tensor.abs() + 1.)
 
+    @staticmethod
+    def stable_softmax(x: Tensor, dim=-1) -> Tensor:
+        max_val, _ = torch.max(x, dim=dim, keepdim=True)
+        norm_x = x - max_val
+        norm_x = norm_x.clamp(min=-20, max=20)
+        exp_x = torch.exp(norm_x)
+        return exp_x / exp_x.sum(dim=dim, keepdim=True).clamp_min(1e-10)
+
+
 class LinearSchedule:
     """Linear schedule, for changing constants during agent training."""
 

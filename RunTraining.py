@@ -3,7 +3,7 @@ import traceback
 from collections import deque
 from typing import Dict
 
-from torch import Tensor
+from torch import Tensor, autograd
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
@@ -15,6 +15,7 @@ from Learner.PrioReplayBuffer import InMemBuffer
 from Learner.Trainer import PPOTrainer
 from Learner.constants import *
 
+autograd.set_detect_anomaly(True)
 writer = SummaryWriter()
 
 game = Game(
