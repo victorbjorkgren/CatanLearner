@@ -13,9 +13,9 @@ import torch as T
 from Learner.Utility.Utils import Holders
 
 
-def assert_capacity(n):
-    # Check that n is an integer greater than 0 and n & (n - 1) == 0
-    assert isinstance(n, int) and n > 0 and n & (n - 1) == 0, "Value is not a power of 2"
+# def assert_capacity(n):
+#     # Check that n is an integer greater than 0 and n & (n - 1) == 0
+#     assert isinstance(n, int) and n > 0 and n & (n - 1) == 0, "Value is not a power of 2"
 
 
 data_lock = threading.Lock()
@@ -36,7 +36,7 @@ class PrioReplayBuffer:
                  beta: float,
                  save_interval: int = 10_000
                  ) -> None:
-        assert_capacity(capacity)
+        # assert_capacity(capacity)
 
         _capacity: int
         _alpha: float

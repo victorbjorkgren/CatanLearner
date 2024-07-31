@@ -2,17 +2,19 @@ import os
 from abc import abstractmethod
 from dataclasses import fields
 from time import sleep
-from typing import Dict
+from typing import Dict, List
 
 import torch
 import torch as T
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.optim as optim
 
 from Learner.Utility.ActionTypes import SparsePi, TradeAction, FlatPi
 from Learner.Utility.CustomDistributions import SparseCatanActionSampler, FlatCatanActionSampler
 from Learner.Utility.DataTypes import PPOTransition, NetInput, NetOutput
-from Learner.constants import PPO_ENTROPY_COEF, PPO_VALUE_COEF, SAVE_LATEST_NET_INTERVAL, SAVE_CHECKPOINT_NET_INTERVAL
+from Learner.constants import PPO_ENTROPY_COEF, PPO_VALUE_COEF, SAVE_LATEST_NET_INTERVAL, SAVE_CHECKPOINT_NET_INTERVAL, \
+    SAC_ENTROPY_ALPHA, SAC_TARGET_TAU
 from Learner.Loss import Loss
 from Learner.Nets import GameNet, PPONet
 from Learner.PrioReplayBuffer import PrioReplayBuffer
@@ -21,12 +23,13 @@ from Learner.constants import LOSS_CLIP, GRAD_CLIP
 
 
 class Trainer:
-    def __init__(self, name: str, buffer: PrioReplayBuffer, batch_size: int, gamma: float, net: GameNet):
+    def __init__(self, name: str, buffer: PrioReplayBuffer, batch_size: int, gamma: float, net: GameNet, net_misc: List[GameNet] = []):
         self.name = name
         self.buffer = buffer
         self.gamma = gamma
         self.batch_size = batch_size
         self.net = net
+        self.net_misc = net_misc
 
         self.known_allowed_states = None
         self.tick_iter = 0
@@ -52,17 +55,17 @@ class Trainer:
             self.save('checkpoint')
 
         # Sometimes print weight info
-        if self.tick_iter % 50 == 1:
-            print('Print time')
-            for name, module in self.net.named_modules():
-                print(name)
-                if hasattr(module, 'weight') and module.weight is not None:
-                    weight_max = T.max(module.weight).item()
-                    if module.weight.grad is not None:
-                        grad_max = T.max(module.weight.grad).item()
-                    else:
-                        grad_max = 0.
-                    print(f"{name}: Max weight = {weight_max:.4e} - Max grad = {grad_max:.4e}")
+        # if self.tick_iter % 50 == 1:
+        #     print('Print time')
+        #     for name, module in self.net.named_modules():
+        #         print(name)
+        #         if hasattr(module, 'weight') and module.weight is not None:
+        #             weight_max = T.max(module.weight).item()
+        #             if module.weight.grad is not None:
+        #                 grad_max = T.max(module.weight.grad).item()
+        #             else:
+        #                 grad_max = 0.
+        #             print(f"{name}: Max weight = {weight_max:.4e} - Max grad = {grad_max:.4e}")
 
         self.tick_iter += 1
 
@@ -80,8 +83,12 @@ class Trainer:
         assert method in ['latest', 'checkpoint']
         if method == 'latest':
             self.net.save('latest')
+            for misc in self.net_misc:
+                misc.save('latest')
         else:
             self.net.save(self.tick_iter)
+            for misc in self.net_misc:
+                misc.save(self.tick_iter)
 
     def update_known_allowed(self, state_mask):
         if self.known_allowed_states is None:
@@ -312,6 +319,7 @@ class PPOTrainer(Trainer):
         value_loss = torch.mean(value_loss)
 
         stats['policy_loss'] = -policy_loss.detach().cpu().item()
+        stats['clip_epsilon'] = self.clip_epsilon(self.tick_iter)
         stats['value_loss'] = value_loss.detach().cpu().item()
         stats['entropy_loss'] = -entropy_loss.detach().cpu().item()
 
@@ -336,9 +344,162 @@ class SACTrainer(Trainer):
                  reward_scale: float
                  ):
         super().__init__('SAC_Agent', buffer, batch_size, gamma, net)
-        self.reward_scale = reward_scale
-        self.optimizer = optim.AdamW(self.net.parameters(), lr=learning_rate, weight_decay=1e-5)
+        self._q1_net = PPONet(net.config, net.batch_size, net.undirected_faces, name='Q1', softmax=False)
+        self._q2_net = PPONet(net.config, net.batch_size, net.undirected_faces, name='Q2', softmax=False)
 
+        self._q1_target_net = PPONet(net.config, net.batch_size, net.undirected_faces, name='Q1_target', softmax=False)
+        self._q2_target_net = PPONet(net.config, net.batch_size, net.undirected_faces, name='Q2_target', softmax=False)
+
+        if net.config['load_state']:
+            self._q1_net.load('latest')
+            self._q2_net.load('latest')
+
+        self._alpha = SAC_ENTROPY_ALPHA
+
+        self.update_targets()
+
+        self.reward_scale = reward_scale
+
+        self._policy_optimizer = optim.AdamW(self.net.parameters(), lr=learning_rate, weight_decay=1e-5)
+        self._q1_optimizer = optim.AdamW(self._q1_net.parameters(), lr=learning_rate, weight_decay=1e-5)
+        self._q2_optimizer = optim.AdamW(self._q2_net.parameters(), lr=learning_rate, weight_decay=1e-5)
+
+    @staticmethod
+    def gather_actions(values, actions):
+        assert values.dim() == 3, 'Expected Tensor [b, t, f]'
+        assert actions.dim() == 2, 'Expected Tensor [b, t]'
+
+        selected_values = torch.gather(values, 2, actions.unsqueeze(-1).long())
+
+        # Shape [b, t, 1] -> [b, t]
+        selected_values = selected_values.squeeze(-1)
+
+        return selected_values
+
+    def update_targets(self):
+        self._q1_target_net.clone_state(self._q1_net)
+        self._q2_target_net.clone_state(self._q2_net)
+
+    def proper_output(self, net, transitions):
+        i_am_player = transitions.reward_pack.player
+        masks = transitions.action_pack.masks
+        net_output = net(transitions.as_net_input)
+        pi = net_output.pi.index * masks.index
+        pi = torch.gather(pi, -1, i_am_player[:,:,None,None].expand(-1,-1,224,-1)).squeeze(-1)
+        pi = pi / pi.sum(-1, keepdims=True).clamp_min(1e-9)
+        pi = FlatPi(pi.unsqueeze(-1))
+        return pi.index.squeeze(-1)
+
+    def q_loss_func(self, transitions):
+        b, t, _, _ = transitions.tensor_size
+
+        rewards = transitions.reward_pack.reward.clone()
+
+        q1 = self.proper_output(self._q1_net, transitions)
+        q2 = self.proper_output(self._q2_net, transitions)
+
+        # q [b, t, n, f] -> [b, t]
+        q1 = self.gather_actions(q1, transitions.action_pack.action)
+        q2 = self.gather_actions(q2, transitions.action_pack.action)
+
+        with torch.no_grad():
+            q1_t = self.proper_output(self._q1_target_net, transitions)
+            q2_t = self.proper_output(self._q2_target_net, transitions)
+            a_prob = self.proper_output(self.net, transitions)
+            q1_t = TensorUtils.left_shift_tensor(q1_t, 1)
+            q2_t = TensorUtils.left_shift_tensor(q2_t, 1)
+            a_prob = TensorUtils.left_shift_tensor(a_prob, 1)
+
+            a_log_prob = torch.log(torch.clamp_min(a_prob, 1e-20))
+            entropy = a_prob * a_log_prob
+
+            min_q_target = torch.min(q1_t, q2_t)
+            target_q = a_prob * (min_q_target - self._alpha * entropy)
+
+            y = rewards + self.gamma * target_q.sum(-1)
+
+        q1_loss = F.mse_loss(y, q1, reduction='none')
+        q2_loss = F.mse_loss(y, q2, reduction='none')
+
+        out_of_seq_mask = (torch.arange(t)[None, :] >= transitions.seq_lens[:, None].cpu()).to(self.net.on_device)
+        q1_loss = q1_loss * ~out_of_seq_mask
+        q2_loss = q2_loss * ~out_of_seq_mask
+
+        q1_loss = q1_loss.mean(-1)
+        q2_loss = q2_loss.mean(-1)
+
+        return q1_loss, q2_loss
+
+    def policy_loss_func(self, transitions):
+        b, t, _, _ = transitions.tensor_size
+
+        with torch.no_grad():
+            q1 = self.proper_output(self._q1_net, transitions)
+            q2 = self.proper_output(self._q2_net, transitions)
+
+        q1 = TensorUtils.left_shift_tensor(q1, 1)
+        q2 = TensorUtils.left_shift_tensor(q2, 1)
+
+        a_probs = self.proper_output(self.net, transitions)
+        a_probs = a_probs * transitions.action_pack.masks.index.squeeze(3)
+        a_probs = a_probs / a_probs.sum(2, keepdim=True).clamp_min(1e-9)
+
+        a_log_probs = torch.log(torch.clamp_min(a_probs, 1e-20))
+        entropy = -torch.sum(a_probs * a_log_probs, dim=-1)
+
+        min_q = a_probs * torch.min(q1, q2)
+        min_q = torch.sum(min_q, dim=-1)
+
+        # TODO: Implement learnable ent_coef
+        # target_entropy = -torch.log(1.0 / transitions.state.action_mask.sum()) * 0.98
+        # ent_coef_losses = self._log_ent_coef * (a_log_probs + target_entropy).detach()
+        # ent_coef_loss = -torch.mean(torch.sum(ent_coef_losses, dim=-1), dim=0)
+
+        policy_losses = -(min_q + self._alpha * entropy)
+
+        loss_mask = (torch.arange(t)[None, :] >= transitions.seq_lens[:, None].cpu()).to(self.net.on_device)
+        policy_losses = policy_losses * ~loss_mask
+
+        policy_losses = policy_losses.view(b, -1).sum(-1)
+
+        return policy_losses
 
     def train(self):
-        pass
+        assert self.buffer.mem_size >= self.batch_size
+        stats = {}
+
+        sample = self.buffer.sample(self.batch_size)
+        transition: PPOTransition = sample["transition"].to(self.net.on_device)
+
+        q1_loss, q2_loss = self.q_loss_func(transition)
+
+        q1_loss = q1_loss.mean()
+        q2_loss = q2_loss.mean()
+
+        self._q1_optimizer.zero_grad()
+        q1_loss.backward()
+        self._q1_optimizer.step()
+
+        self._q2_optimizer.zero_grad()
+        q2_loss.backward()
+        self._q2_optimizer.step()
+
+        policy_loss = self.policy_loss_func(transition)
+
+        policy_loss = policy_loss.mean()
+
+        self._policy_optimizer.zero_grad()
+        policy_loss.backward()
+        self._policy_optimizer.step()
+
+        self._q1_target_net.lerp_towards(self._q1_net, SAC_TARGET_TAU)
+        self._q2_target_net.lerp_towards(self._q2_net, SAC_TARGET_TAU)
+
+        total_loss = q1_loss.detach() + q2_loss.detach() + policy_loss.detach()
+        total_loss.cpu()
+
+        stats['q1 loss'] = q1_loss.detach().cpu().item()
+        stats['q2 loss'] = q2_loss.detach().cpu().item()
+        stats['policy loss'] = policy_loss.detach().cpu().item()
+
+        return total_loss, stats

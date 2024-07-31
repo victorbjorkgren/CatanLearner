@@ -560,9 +560,11 @@ class PPONet(GameNet):
                  net_config,
                  batch_size=1,
                  undirected_faces=True,
+                 name='PPO',
+                 softmax=True
                  ):
-        super().__init__(net_config, 'PPO', batch_size, undirected_faces)
-
+        super().__init__(net_config, name, batch_size, undirected_faces)
+        self.softmax = softmax
         if net_config['load_state']:
             self.load('latest')
 
@@ -571,8 +573,11 @@ class PPONet(GameNet):
     def forward(self, transition: PPOTransition) -> NetOutput:
         core = self._core_net(transition)
         # pi = core.action_index.index.softmax(-2)
-        pi = TensorUtils.stable_softmax(core.action_index.index, dim=-2)
-        return NetOutput(FlatPi(pi), core.state_value, core.hn, core.cn)
+        if self.softmax:
+            pi = TensorUtils.stable_softmax(core.action_index.index, dim=-2)
+            return NetOutput(FlatPi(pi), core.state_value, core.hn, core.cn)
+        else:
+            return NetOutput(FlatPi(core.action_index.index), core.state_value, core.hn, core.cn)
         # pi_type = core.action_type.softmax(-2)
         # pi_trade = TradeAction(give=core.action_trade.give.softmax(-2), get=core.action_trade.get.softmax(-2))
         # if DENSE_FORWARD:
@@ -588,9 +593,20 @@ class PPONet(GameNet):
         action_mask = self._core_net.action_mask[None, :, :, :, None].repeat(b, s, 1, 1, f).to(action_logits.device)
         z = torch.exp(action_logits) * action_mask
         sum_z = TensorUtils.nn_sum(z, [2, 3]).clamp_min(1e-9)
-        # sum_z[sum_z == 0] = 1
         action_probs = z / sum_z
         return action_probs
+
+    def lerp_towards(self, other: nn.Module, alpha: float):
+        assert 0 <= alpha <= 1
+
+        lerp_state = {}
+        for key in self.state_dict().keys():
+            if key in other.state_dict().keys():
+                lerp_state[key] = alpha * other.state_dict()[key] + (1 - alpha) * self.state_dict()[key]
+            else:
+                raise KeyError(f'Key {key} not in {other.state_dict()}')
+
+        self.load_state_dict(lerp_state)
 
     @staticmethod
     def get_pi(net_out: NetOutput, i_am_player: Tensor | int):

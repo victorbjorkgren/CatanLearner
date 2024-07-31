@@ -651,6 +651,23 @@ class TensorUtils:
         exp_x = torch.exp(norm_x)
         return exp_x / exp_x.sum(dim=dim, keepdim=True).clamp_min(1e-10)
 
+    @staticmethod
+    def left_shift_tensor(tensor: Tensor, dim: int) -> Tensor:
+        # Create a view of the tensor that moves the specified dimension to the last dimension
+        perm = list(range(tensor.ndim))
+        perm[dim], perm[-1] = perm[-1], perm[dim]
+        tensor = tensor.permute(perm)
+
+        # Perform the left shift on the last dimension
+        tensor[..., :-1] = tensor[..., 1:]
+        tensor[..., -1] = 0
+
+        # Permute the tensor back to the original dimension order
+        tensor = tensor.permute(perm)
+        perm[dim], perm[-1] = perm[-1], perm[dim]
+
+        return tensor
+
 
 class LinearSchedule:
     """Linear schedule, for changing constants during agent training."""

@@ -12,7 +12,7 @@ from Learner.AgentTracker import AgentTracker
 from Learner.Agents.PPOAgent import PPOAgent
 from Learner.Nets import PPONet
 from Learner.PrioReplayBuffer import InMemBuffer
-from Learner.Trainer import PPOTrainer
+from Learner.Trainer import PPOTrainer, SACTrainer
 from Learner.constants import *
 
 autograd.set_detect_anomaly(True)
@@ -45,7 +45,7 @@ actor_net_list = [PPONet(actor_net_init, batch_size=BATCH_SIZE) for _ in range(N
 buffer = InMemBuffer(
     alpha=REPLAY_ALPHA,
     beta=REPLAY_BETA,
-    capacity=BATCH_SIZE,
+    capacity=REPLAY_MEMORY_SIZE,
     max_seq_len=MAX_SEQUENCE_LENGTH,
 )
 trainer = PPOTrainer(

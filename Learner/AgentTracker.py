@@ -52,7 +52,6 @@ class AgentTracker:
             agent.net.save(0)
             self.checkpoint_elo['PPO_Agent_0.pth'] = 1000
 
-
     def load_contestants(self, method=None):
         if method is None:
             method = 'random'
@@ -131,9 +130,15 @@ class AgentTracker:
 
         for i in range(n):
             # Normalize rank to a score between 0 and 1. Skip the two first round points.
-            actual_score = (self.agent_list[i].episode_score-2) / 8
+            # actual_score = (self.agent_list[i].episode_score-2) / 8
             for j in range(n):
                 if i != j:
+                    if self.agent_list[i].episode_score > self.agent_list[j].episode_score:
+                        actual_score = 1.
+                    elif self.agent_list[i].episode_score == self.agent_list[j].episode_score:
+                        actual_score = .5
+                    else:
+                        actual_score = 0.
                     expected_score_i_vs_j = 1 / (1 + 10 ** ((player_elo[j] - player_elo[i]) / 400))
                     updated_elo[i] += k * (actual_score - expected_score_i_vs_j)
 
