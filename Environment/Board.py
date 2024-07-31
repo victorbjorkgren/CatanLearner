@@ -5,7 +5,6 @@ import torch_geometric.data as pyg_data
 
 from HexGrid.HexGrid import make_hex_grid
 from Learner.Utility.Utils import TensorUtils
-from . import Player
 
 from .constants import *
 
@@ -30,14 +29,51 @@ class Board:
     [player 0, player 1, ..., player k]
     """
 
-    def __init__(self, n_players):
+    def __init__(self, n_players, game):
         self.n_players = n_players
+        self.game = game
 
         # init states
         grid = make_hex_grid(BOARD_SIZE)
-        node_states = T.zeros((len(grid.nodes), n_players), dtype=T.float)
+        node_states = T.zeros((len(grid.nodes), n_players + N_RESOURCES), dtype=T.float)
         edge_states = T.zeros((len(grid.edges) * 2, n_players), dtype=T.float)
         face_states = T.zeros((N_TILES, N_TILE_TYPES), dtype=T.float)
+
+        # Update trade states for nodes
+        res_dict = {'brick': 0 + n_players,
+                    'grain': 1 + n_players,
+                    'ore': 2 + n_players,
+                    'lumber': 3 + n_players,
+                    'wool': 4 + n_players}
+        node_states[:, n_players:] = 4
+
+        # n 0, 1 -> 3 any
+        node_states[0, n_players:] = 3
+        node_states[1, n_players:] = 3
+        # n 3, 4 -> 2 grain
+        node_states[3, res_dict['grain']] = 2
+        node_states[4, res_dict['grain']] = 2
+        # n 14, 15 -> 2 ore
+        node_states[14, res_dict['ore']] = 2
+        node_states[15, res_dict['ore']] = 2
+        # n 26, 37 -> 3 any
+        node_states[26, n_players:] = 3
+        node_states[37, n_players:] = 3
+        # n 46, 45 -> 2 wool
+        node_states[46, res_dict['wool']] = 2
+        node_states[45, res_dict['wool']] = 2
+        # n 51, 50 -> 3 any
+        node_states[51, n_players:] = 3
+        node_states[50, n_players:] = 3
+        # n 48, 47 -> 3 any
+        node_states[48, n_players:] = 3
+        node_states[47, n_players:] = 3
+        # n 38, 28 -> 2 brick
+        node_states[38, res_dict['brick']] = 2
+        node_states[28, res_dict['brick']] = 2
+        # n 17, 7 -> 2 wood
+        node_states[17, res_dict['lumber']] = 2
+        node_states[7, res_dict['lumber']] = 2
 
         # Fill Faces as tiles
         for i in range(len(TILE_TYPES)):
@@ -105,6 +141,9 @@ class Board:
         self.state.edge_attr[uv_indices, player] = 1
         self.state.edge_attr[vu_indices, player] = 1
 
+    def get_node_trade_rate(self, node):
+        return self.state.x[node, self.n_players:]
+
     def can_build_village(self,
                           node_id: int | T.Tensor,
                           player: int,
@@ -120,16 +159,16 @@ class Board:
         adjacent_nodes = neighborhood_nodes[neighborhood_nodes != node_id]
 
         roads = self.state.edge_attr[adj_mask, player].nonzero().numel()
-        adjacent_buildings = self.state.x[adjacent_nodes, :].nonzero().numel()
+        adjacent_buildings = self.state.x[adjacent_nodes, :self.n_players].nonzero().numel()
         my_buildings = self.state.x[node_id, player]
-        other_players_buildings = (self.state.x[node_id, :].sum() - my_buildings)
+        other_players_buildings = (self.state.x[node_id, :self.n_players].sum() - my_buildings)
 
         is_free = (adjacent_buildings == 0) & (other_players_buildings == 0) & (my_buildings < 2)
         has_connection = roads != 0
 
         return is_free & (has_connection | first_turn), my_buildings
 
-    def sparse_village_mask(self, player, hand, first_turn=False, first_turn_village=False):
+    def sparse_village_mask(self, player: int, hand: Tensor, first_turn=False, first_turn_village=False):
         if first_turn:
             if not first_turn_village:
                 return T.tensor([], dtype=T.long)
@@ -144,8 +183,8 @@ class Board:
         can_afford_small = (hand >= T.tensor([1, 1, 0, 1, 1])).all()
         can_afford_large = (hand >= T.tensor([0, 2, 3, 0, 0])).all()
 
-        has_small_left = player.n_settlements < 5
-        has_large_left = player.n_cities < 4
+        has_small_left = T.tensor(self.game.players[player].n_settlements < 5)
+        has_large_left = T.tensor(self.game.players[player].n_cities < 4)
 
         can_afford_small = can_afford_small and has_small_left
         can_afford_large = can_afford_large and has_large_left
@@ -161,15 +200,16 @@ class Board:
         if has_road.numel() == 0:
             return has_road.long()
 
-        not_occupied = self.state.x[has_road, :player].sum(1)
-        not_occupied += self.state.x[has_road, player+1:].sum(1)
+        occupation = self.state.x[:, :self.n_players]
+        not_occupied = occupation[has_road, :player].sum(1)
+        not_occupied += occupation[has_road, player+1:self.n_players].sum(1)
         not_occupied = not_occupied == 0
 
         has_road = has_road[not_occupied]
         if has_road.numel() == 0:
             return T.tensor([], dtype=T.long)
 
-        no_adj = self.state.x.nonzero()[:, 0]
+        no_adj = occupation.nonzero()[:, 0]
         no_adj = T.isin(self.state.edge_index[0, :], no_adj)
         no_adj = self.state.edge_index[1, no_adj]
         no_adj = ~T.isin(has_road, no_adj)
@@ -186,7 +226,7 @@ class Board:
                 mask[node_id] = True
         return mask
 
-    def get_road_mask(self, player: Player, hand: Tensor, first_turn: bool = False) -> T.Tensor:
+    def get_road_mask(self, player, hand: Tensor, first_turn: bool = False) -> T.Tensor:
         mask = T.zeros((self.state.num_edges,), dtype=T.bool)
         if (hand < T.tensor([1, 0, 0, 1, 0])).any():
             return mask
@@ -197,15 +237,15 @@ class Board:
             mask[edge_id] = can_build
         return mask
 
-    def sparse_road_mask(self, player, hand, first_turn=False, first_turn_village=False) -> T.Tensor:
+    def sparse_road_mask(self, player: int, hand: Tensor, first_turn=False, first_turn_village=False) -> T.Tensor:
         if (hand < T.tensor([1, 0, 0, 1, 0])).any():
             return T.tensor([], dtype=T.long)
-        if player.n_roads >= 15:
+        if self.game.players[player].n_roads >= 15:
             return T.tensor([], dtype=T.long)
         if first_turn:
             if first_turn_village:
                 return T.tensor([], dtype=T.long)
-            houses = self.state.x.nonzero()
+            houses = self.state.x[:, :self.n_players].nonzero()
             houses = houses[houses[:, 1] == player, 0]
             house_edges = T.isin(self.state.edge_index, houses).any(0)
             return self.state.edge_index[:, house_edges]

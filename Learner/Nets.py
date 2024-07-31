@@ -146,7 +146,7 @@ class CoreNet(BaseNet):
         self.edge_adj_norm = TensorUtils.preprocess_adj(self.edge_adj, batch_size, add_self_loops=False)
         self.full_adj_norm = TensorUtils.preprocess_adj(self.full_adj, batch_size, add_self_loops=False)
 
-        self.node_embed = MLP(self.n_players * 2, n_embed, residual=False)
+        self.node_embed = MLP(self.n_players * 2 + N_RESOURCES, n_embed, residual=False)
         self.edge_embed = MLP(self.n_players * 2, n_embed, residual=False)
         self.face_embed = MLP(n_face_attr, n_embed, residual=False)
         self.game_embed = MLP(n_game_attr, n_embed, residual=False)

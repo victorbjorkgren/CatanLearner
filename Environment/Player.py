@@ -2,14 +2,15 @@ from __future__ import annotations
 from typing import Optional
 
 import torch as T
+from torch import Tensor
 
+from Environment.constants import N_RESOURCES
 from Learner.Agents import BaseAgent
 
 
 ###
 # Player states:
 #
-# TODO: add cards etc.
 # [Bricks, Grains, Ores, Lumbers, Wools]
 #
 class Player:
@@ -46,6 +47,11 @@ class Player:
         self.latent_reward = 0
         return r
 
+    def update_best_trade_rate(self, rate: Tensor):
+        assert rate.shape == T.Size([1, 1, N_RESOURCES])
+        rate = rate[0, 0, :]
+        self.best_trade_rate = T.min(self.best_trade_rate, rate)
+
     @property
     def state(self):
         return T.cat((self.hand, T.tensor([self.points])))
@@ -69,10 +75,13 @@ class Player:
         give_ind = int(give_ind.item())
         get_ind = int(get_ind.item())
 
-        if self.hand[give_ind] < 4:
+        trade_rate = self.best_trade_rate[give_ind].item()
+        trade_rate = int(trade_rate)
+
+        if self.hand[give_ind] < trade_rate:
             return False
 
-        self.sub(give_ind, 4)
+        self.sub(give_ind, trade_rate)
         self.add(get_ind, 1)
 
         return True
@@ -92,8 +101,6 @@ class Player:
                 self.trade_pile[:] = 0
             else:
                 pass
-
-
 
     def rob(self):
         if sum(self.hand) > 7:

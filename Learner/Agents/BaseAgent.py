@@ -134,7 +134,7 @@ class BaseAgent:
                 return T.tensor((0, 0)), T.tensor((73, 73)), False
 
         elif action_type == 3:
-            tradeable = self.game.can_trade(i_am_player, 4)
+            tradeable = self.game.can_trade(i_am_player)
             desired = randint(0, 4)
             if tradeable.numel() == 0:
                 return T.tensor((0, 0)), T.tensor((73, 73)), False

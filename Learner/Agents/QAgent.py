@@ -56,7 +56,7 @@ class QAgent(BaseAgent):
 
         # Get masks
         build_mask = ~state[:, :, :, -N_PLAYERS + i_am_player].bool()
-        tradeable = self.game.can_trade(i_am_player, 4)
+        tradeable = self.game.can_trade(i_am_player)
         trade_mask = ~T.isin(T.arange(5), tradeable)
         with T.no_grad():
             q_mat, q_trade_mat, hn, cn = self.q_net(state.unsqueeze(1), T.Tensor([1]), h0, c0)

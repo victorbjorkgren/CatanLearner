@@ -58,7 +58,7 @@ class PPOAgent(BaseAgent):
         # build_mask = torch.zeros((N_NODES, N_NODES))
         # build_mask[buildable[0, :], buildable[1, :]] = 1
         # build_mask = ~state[0, :54, :54, -N_PLAYERS+i_am_player].bool()
-        tradable = self.game.can_trade(i_am_player, 4)
+        tradable = self.game.can_trade(i_am_player)
         trade_mask = T.isin(T.arange(5), tradable)[None, None, :, None]
         no_op_mask = torch.tensor([self.game.can_no_op()])
         trade_mask = TradeAction(give=trade_mask, get=torch.ones_like(trade_mask))

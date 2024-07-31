@@ -20,6 +20,8 @@ from .Player import Player
 from .constants import *
 
 
+# TODO: Add Cards and Robber mechanics
+
 class Game:
     def __init__(self, n_players, max_turns=500, max_no_progress=100, start_episode=0):
         self.max_no_progress = max_no_progress
@@ -31,14 +33,13 @@ class Game:
         self.first_turn_village_switch: Optional[bool] = None
         self.first_turn: Optional[bool] = None
         self.current_player: Optional[int] = None
-        self.board: Optional[Board] = None
         self.turn: Optional[int] = None
         self.idle_turns: Optional[int] = None
         self.build_cmap: List[str] = None
         self.dark_cmap: List[str] = None
 
         # Placeholder inits
-        self.board = Board(self.n_players)
+        self.board = Board(self.n_players, self)
         self.players = [Player(None)] * self.n_players
 
         self.zero_reward = 0
@@ -85,7 +86,7 @@ class Game:
         self.turn = 0
         self.idle_turns = 0
         self.episode += 1
-        self.board = Board(self.n_players)
+        self.board = Board(self.n_players, self)
         self.players = [Player(agent) for agent in self.player_agents]
         self.current_player = 0
         self.first_turn = True
@@ -152,7 +153,7 @@ class Game:
                 self.player_agents[self.current_player].register_victory()
             return reward, True, succeeded
 
-    def can_trade(self, player: int, rate: int) -> Tensor:
+    def can_trade(self, player: int) -> Tensor:
         """
         Returns the inds that the player can trade at the asked rate
         :param player: index for the player to do the trade
@@ -161,7 +162,7 @@ class Game:
         """
         if self.first_turn:
             return torch.tensor([])
-        return torch.argwhere(self.players[player].hand >= rate)
+        return torch.argwhere(self.players[player].hand >= self.players[player].best_trade_rate)
 
     def can_no_op(self):
         return not self.first_turn
@@ -241,19 +242,12 @@ class Game:
 
     def give_resource(self, hit):
         node_hits = self.board.state.face_index[hit[0]].flatten()
-        player_gains = self.board.state.x[node_hits].sum(0)
+        player_gains = self.board.state.x[node_hits, :self.n_players].sum(0)
         resource = hit[1] - 1  # 0 is bandit for board only, not player
         if resource >= 0:
             for i, gain in enumerate(player_gains):
                 self.players[i].add(resource.item(), gain.item())
                 self.players[i].latent_reward += LATENT_REWARD
-
-    @staticmethod
-    def maritime_trade(player: Player, give: Tensor, get: Tensor, rate):
-        assert give.sum() == rate
-
-        player.give(give)
-        player.get(get)
 
     def build_road(self, index, player, first_turn=False):
         # [Bricks, Grains, Ores, Lumbers, Wools]
@@ -288,6 +282,8 @@ class Game:
                     self.board.state.x[index, player] = size + 1
                     self.players[player].points += 1
                     self.players[player].n_settlements += 1
+                    node_trade_rate = self.board.get_node_trade_rate(index)
+                    self.players[player].update_best_trade_rate(node_trade_rate)
                     return True
             if size == 1:
                 # [Bricks, Grains, Ores, Lumbers, Wools]
@@ -431,3 +427,9 @@ class Game:
         os.makedirs(folder, exist_ok=True)
         plt.savefig(os.path.join(folder, filename))
         plt.close()
+
+if __name__ == '__main__':
+    game = Game(1)
+    game.register_agents([1])
+    game.reset()
+    game.render(debug=True)
