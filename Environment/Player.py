@@ -16,7 +16,8 @@ class Player:
     def __init__(self, agent: BaseAgent | None):
         self.hand = T.tensor([0, 0, 0, 0, 0])
         self.points = 0
-        self.n_villages = 0
+        self.n_settlements = 0
+        self.n_cities = 0
         self.n_roads = 0
         self.agent = agent
 

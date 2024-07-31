@@ -261,6 +261,7 @@ class Game:
             if (
                     (self.players[player].hand[0] > 0)
                     & (self.players[player].hand[3] > 0)
+                    & (self.players[player].n_roads < 15)
             ):
                 self.players[player].sub(0, 1)
                 self.players[player].sub(3, 1)
@@ -286,7 +287,7 @@ class Game:
                     self.players[player].sub(4, 1)
                     self.board.state.x[index, player] = size + 1
                     self.players[player].points += 1
-                    self.players[player].n_villages += 1
+                    self.players[player].n_settlements += 1
                     return True
             if size == 1:
                 # [Bricks, Grains, Ores, Lumbers, Wools]
@@ -298,6 +299,8 @@ class Game:
                     self.players[player].sub(2, 3)
                     self.board.state.x[index, player] = size + 1
                     self.players[player].points += 1
+                    self.players[player].n_settlements -= 1
+                    self.players[player].n_cities += 1
                     return True
         return False
 

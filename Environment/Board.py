@@ -1,9 +1,11 @@
 import torch as T
+from torch import Tensor
 from torch_geometric.utils.convert import from_networkx
 import torch_geometric.data as pyg_data
 
 from HexGrid.HexGrid import make_hex_grid
 from Learner.Utility.Utils import TensorUtils
+from . import Player
 
 from .constants import *
 
@@ -142,6 +144,12 @@ class Board:
         can_afford_small = (hand >= T.tensor([1, 1, 0, 1, 1])).all()
         can_afford_large = (hand >= T.tensor([0, 2, 3, 0, 0])).all()
 
+        has_small_left = player.n_settlements < 5
+        has_large_left = player.n_cities < 4
+
+        can_afford_small = can_afford_small and has_small_left
+        can_afford_large = can_afford_large and has_large_left
+
         if (not can_afford_small) and (not can_afford_large):
             return T.tensor([], dtype=T.long)
 
@@ -178,9 +186,11 @@ class Board:
                 mask[node_id] = True
         return mask
 
-    def get_road_mask(self, player, hand, first_turn=False) -> T.Tensor:
+    def get_road_mask(self, player: Player, hand: Tensor, first_turn: bool = False) -> T.Tensor:
         mask = T.zeros((self.state.num_edges,), dtype=T.bool)
         if (hand < T.tensor([1, 0, 0, 1, 0])).any():
+            return mask
+        if player.n_roads >= 15:
             return mask
         for edge_id in range(self.state.num_edges):
             can_build = self.can_build_road(edge_id, player, first_turn)
@@ -189,6 +199,8 @@ class Board:
 
     def sparse_road_mask(self, player, hand, first_turn=False, first_turn_village=False) -> T.Tensor:
         if (hand < T.tensor([1, 0, 0, 1, 0])).any():
+            return T.tensor([], dtype=T.long)
+        if player.n_roads >= 15:
             return T.tensor([], dtype=T.long)
         if first_turn:
             if first_turn_village:
