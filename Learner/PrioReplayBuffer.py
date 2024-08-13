@@ -1,8 +1,10 @@
+import multiprocessing
 import os
 import pickle
 import threading
 from abc import abstractmethod
 from collections import defaultdict, deque
+from multiprocessing import shared_memory
 from queue import Queue
 from time import sleep
 from typing import Deque
@@ -18,7 +20,7 @@ from Learner.Utility.Utils import Holders
 #     assert isinstance(n, int) and n > 0 and n & (n - 1) == 0, "Value is not a power of 2"
 
 
-data_lock = threading.Lock()
+data_lock = multiprocessing.Lock()
 
 
 def synchronized_buffer(func):
@@ -160,7 +162,9 @@ class InMemBuffer(PrioReplayBuffer):
                  # save_interval: int = 10_000
                  ) -> None:
         super().__init__(capacity, max_seq_len, alpha, beta)
-
+        buffer_mem = 8_000 * self._capacity
+        self.shm = shared_memory.SharedMemory(create=True, size=buffer_mem)
+        print(f'Initializing {int(buffer_mem/1024):d} Mb shared memory')
         # self.data = {}
         # self.data['state'] = T.zeros((capacity, max_seq_len, 74, 74, 16), dtype=T.float)
         # self.data['seq_len'] = T.zeros((capacity,), dtype=T.long)
@@ -176,6 +180,12 @@ class InMemBuffer(PrioReplayBuffer):
 
         # self._next_idx = self._size % self._capacity
         self.prios += self._max_priority ** self._alpha
+
+    def close(self):
+        self.shm.close()
+
+    def unlink(self):
+        self.shm.unlink()
 
     @synchronized_buffer
     def sample(self, n):

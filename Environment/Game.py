@@ -7,13 +7,15 @@ import networkx as nx
 import numpy as np
 import torch
 import torch as T
+from PIL import Image
 from torch import Tensor
 from torch_geometric.utils.convert import to_networkx
 
 from Learner.Agents import BaseAgent
-from Learner.Utility.ActionTypes import BaseAction, BuildAction, TradeAction, NoopAction, SettlementAction, RoadAction
+from Learner.Utility.ActionTypes import BaseAction, BuildAction, TradeAction, NoopAction, SettlementAction, RoadAction, \
+    FlatPi
 from Learner.Utility.DataTypes import GameState
-from Learner.Utility.Utils import TensorUtils
+from Learner.Utility.Utils import TensorUtils, get_unique_filename
 from Learner.constants import LATENT_REWARD
 from .Board import Board
 from .Player import Player
@@ -331,7 +333,8 @@ class Game:
         self.build_cmap = hex_colors
         self.dark_cmap = darker_hex_colors
 
-    def render(self, training_img=False, debug=False):
+    def render(self, render_type='training', debug=False):
+        assert render_type in ['training', 'testing', 'init']
         if self.build_cmap is None:
             self.init_cmap(self.n_players)
 
@@ -418,15 +421,174 @@ class Game:
         ###
         # Save
         ###
-        if training_img:
+        if render_type == 'training':
             folder = f"./Renders/Training/"
             filename = f"Ep {self.episode}-{int(self.turn)} -- Players : {str.join(', ', [str(a) for a in self.player_agents])}.png"
-        else:
+        elif render_type == 'testing':
             folder = f"./Renders/Test/Episode {int(self.episode)}/"
             filename = f"Turn {int(self.turn)}_{turn_appendix}.png"
+        elif render_type == 'init':
+            folder = f"./Renders/Initial/"
+            filename = f"{self.episode}.png"
         os.makedirs(folder, exist_ok=True)
         plt.savefig(os.path.join(folder, filename))
         plt.close()
+
+    def render_probs(self, flat_pi: FlatPi, render_type: str):
+        assert render_type in ['training', 'testing', 'init']
+
+        node_p, edge_p, trade_p, noop_p = flat_pi.unstack_parts()
+        b, t, _, _ = node_p.shape
+        assert b == 1 and t == 1, "Expected batch and timesteps to be 1 in rendering"
+
+        node_p = node_p[0, 0, :, 0]
+        edge_p = edge_p[0, 0, :, 0]
+        trade_p = trade_p[0, 0, :, :]
+        noop_p = noop_p[0, 0, :, :]
+
+        # if node_p[node_p == 0].all():
+        #     node_p += 1e-10
+        # if edge_p[edge_p == 0].all():
+        #     edge_p += 1e-10
+        # edge_p.clamp_min(1e-10)
+
+        fig = plt.figure(figsize=(FIG_X, FIG_Y))
+        fig.patch.set_facecolor('black')  # Set background to black
+        plt.gca().set_facecolor('black')  # Ensure the axes background is also black
+        plt.axis('off')
+        plt.axis('equal')
+
+        p_min=0
+        p_max=flat_pi.index.max().item()
+
+        plt.text(0.01, 0.99, f"Pmax = {p_max*100.:.2f} %", color='white', fontsize=12, ha='left', va='top',
+                 transform=plt.gca().transAxes)
+
+        turn_appendix = int((self.turn - int(self.turn)) * self.n_players)
+
+        # Create a colormap for the heatmap
+        cmap = plt.cm.gray  # Black to white colormap
+
+        ###
+        # Overlay heatmap for board
+        ###
+        s = to_networkx(self.board.state, node_attrs=['pos', 'x'], edge_attrs=['edge_attr'])
+        nx.draw_networkx_nodes(s, self.board.state.pos, node_color=node_p.numpy(), cmap=cmap, vmin=p_min, vmax=p_max, alpha=1.0)
+        nx.draw_networkx_edges(s, self.board.state.pos, edge_color=edge_p.numpy(), edge_cmap=cmap, width=2, edge_vmin=p_min, edge_vmax=p_max, alpha=1.0)
+
+        # Define sub axes
+        trade_ax = plt.axes((0.05, 0.05, 0.05*2, 0.05*5))  # Adjust the position and size as needed
+        noop_ax = plt.axes((0.85, 0.05, 0.1, 0.1))  # Adjust position and size as needed
+
+        # Add an inset for the trade matrix heatmap
+        trade_ax.imshow(trade_p, cmap='gray', aspect='auto', interpolation='nearest')
+
+        # Trade matrix heatmap
+        trade_ax.set_title('Trade Matrix')
+        trade_ax.title.set_color('white')
+        trade_ax.set_xticks([0, 1])
+        trade_ax.set_xticklabels(['Give', 'Get'], color='white')
+        # trade_ax.xaxis.label.set_color('white')
+        # trade_ax.yaxis.label.set_color('white')
+        trade_ax.set_yticks(range(5))
+        trade_ax.set_yticklabels(['brick', 'grain', 'ore', 'lumber', 'wool'], color='white')
+        trade_ax.tick_params(axis='both', which='both', length=0, color='white')
+        # trade_ax.spines['top'].set_color('white')
+        # trade_ax.spines['right'].set_color('white')
+        # trade_ax.spines['left'].set_color('white')
+        # trade_ax.spines['bottom'].set_color('white')
+
+        # Remove axes of the inset to keep it clean
+        trade_ax.spines['top'].set_visible(False)
+        trade_ax.spines['right'].set_visible(False)
+        trade_ax.spines['left'].set_visible(False)
+        trade_ax.spines['bottom'].set_visible(False)
+
+        # Noop heat map
+        noop_ax.imshow(noop_p, cmap='gray', vmin=p_min, vmax=p_max, aspect='auto')
+
+        # Customize the inset for no-op
+        noop_ax.set_title('No-op', fontsize=10, color='white')
+        noop_ax.set_xticks([])
+        noop_ax.set_yticks([])
+        noop_ax.spines['top'].set_visible(False)
+        noop_ax.spines['right'].set_visible(False)
+        noop_ax.spines['left'].set_visible(False)
+        noop_ax.spines['bottom'].set_visible(False)
+
+        ###
+        # Save or show as needed
+        ###
+        if render_type == 'training':
+            folder = f"./Renders/Training/"
+            filename = f"Ep {self.episode}-{int(self.turn)} -- Players : {str.join(', ', [str(a) for a in self.player_agents])}_heat.png"
+        elif render_type == 'testing':
+            folder = f"./Renders/Test/Episode {int(self.episode)}/"
+            filename = f"Turn {int(self.turn)}_{turn_appendix}_heat.png"
+        elif render_type == 'init':
+            folder = f"./Renders/Initial/"
+            filename = f"{self.episode}_heat.png"
+        else:
+            raise ValueError(f"Invalid render type: {render_type}")
+        os.makedirs(folder, exist_ok=True)
+        plt.savefig(os.path.join(folder, filename))
+        plt.close()
+
+    def render_side_by_side(self, flat_pi: FlatPi, render_type: str):
+        assert render_type in ['training', 'testing', 'init']
+
+        turn_appendix = int((self.turn - int(self.turn)) * self.n_players)
+
+        if render_type == 'training':
+            folder = f"./Renders/Training/"
+            filename = f"Ep {self.episode}-{int(self.turn)} -- Players : {str.join(', ', [str(a) for a in self.player_agents])}"
+        elif render_type == 'testing':
+            folder = f"./Renders/Test/Episode {int(self.episode)}/"
+            filename = f"Turn {int(self.turn)}_{turn_appendix}"
+        elif render_type == 'init':
+            folder = f"./Renders/Initial/"
+            filename = f"{self.episode}"
+        else:
+            raise ValueError(f"Invalid render type: {render_type}")
+
+        self.render(render_type)
+        self.render_probs(flat_pi, render_type)
+
+        render_file = os.path.join(folder, filename+'.png')
+        render_p_file = os.path.join(folder, filename + '_heat.png')
+        render_comb_file = get_unique_filename(os.path.join(folder, filename + '_comb.png'))
+
+        # Load the images using PIL
+        image1 = Image.open(render_file)
+        image2 = Image.open(render_p_file)
+
+        # Get the width and height of the images
+        width1, height1 = image1.size
+        width2, height2 = image2.size
+
+        # Create a new image with the width equal to the sum of the widths of both images
+        # and the height equal to the maximum height of the two images
+        combined_width = width1 + width2
+        combined_height = max(height1, height2)
+
+        # Create a new blank image with the appropriate size
+        combined_image = Image.new("RGB", (combined_width, combined_height))
+
+        # Paste the two images into the combined image
+        combined_image.paste(image1, (0, 0))
+        combined_image.paste(image2, (width1, 0))
+
+        # Save the combined image as a new file
+        combined_image.save(render_comb_file)
+
+        # Close the image objects to release the file handles
+        image1.close()
+        image2.close()
+
+        # Remove the original images
+        os.remove(render_file)
+        os.remove(render_p_file)
+
 
 if __name__ == '__main__':
     game = Game(1)

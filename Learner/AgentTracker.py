@@ -222,6 +222,7 @@ class AgentTracker:
             print('No ELO for checkpoints found - init fresh')
             self.best_elo = 1000
             self.checkpoint_elo = {}
+            os.makedirs('./PastTitans/', exist_ok=True)
             checkpoints = os.listdir('./PastTitans/')
             for e in checkpoints:
                 if e not in self.checkpoint_elo:

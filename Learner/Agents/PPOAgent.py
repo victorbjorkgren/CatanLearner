@@ -1,5 +1,6 @@
 from collections import deque, namedtuple
 from random import randint
+from typing import Tuple
 
 import torch
 import torch as T
@@ -41,7 +42,7 @@ class PPOAgent(BaseAgent):
         self.h0 = T.zeros((1, 1, 32), dtype=T.float)
         self.c0 = T.zeros((1, 1, 32), dtype=T.float)
 
-    def sample_action(self, state: GameState, i_am_player: int) -> BaseAction:
+    def sample_action(self, state: GameState, i_am_player: int, return_p=False) -> Tuple[BaseAction, FlatPi]:
         # state_key = TensorUtils.get_cache_key(state)
 
         if self.my_name in ['Titan', 'latest']:
@@ -72,6 +73,7 @@ class PPOAgent(BaseAgent):
 
         # Apply masks
         net_out.pi.index *= mask.index
+        net_out.pi.index = TensorUtils.top_k_f_mask(net_out.pi.index)
         net_out.pi.index /= net_out.pi.index.sum(dim=-2, keepdim=True).clamp_min(1e-9)
         assert ~net_out.pi.index.isnan().any()
 
@@ -90,7 +92,7 @@ class PPOAgent(BaseAgent):
             #                       get=torch.ones_like(pi.trade.get))
             # )
             self.action_pack_buffer.append(PPOActionPack(action_index, mask, logprob, value, ht, ct))
-        return action
+        return action, net_out.pi
 
     def get_build_mask(self, player) -> T.Tensor:
         road_mask = self.game.board.sparse_road_mask(player, self.game.players[player].hand, self.game.first_turn, self.game.first_turn_village_switch)

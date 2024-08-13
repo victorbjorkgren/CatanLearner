@@ -35,11 +35,11 @@ class Player:
 
     def __str__(self):
         # [Bricks, Grains, Ores, Lumbers, Wools]
-        return ((f"Brick {int(self.hand[0])}\n"
-                 f"Grain {int(self.hand[1])}\n"
-                 f"Ore {int(self.hand[2])}\n"
-                 f"Lumber {int(self.hand[3])}\n"
-                 f"Wool {int(self.hand[4])}\n")
+        return ((f"Brick {int(self.hand[0])} ({int(self.best_trade_rate[0])})\n"
+                 f"Grain {int(self.hand[1])} ({int(self.best_trade_rate[1])})\n"
+                 f"Ore {int(self.hand[2])} ({int(self.best_trade_rate[2])})\n"
+                 f"Lumber {int(self.hand[3])} ({int(self.best_trade_rate[3])})\n"
+                 f"Wool {int(self.hand[4])} ({int(self.best_trade_rate[4])})\n")
                 + f"\nPoints {int(self.points)}")
 
     def flush_reward(self):

@@ -1,3 +1,4 @@
+import os
 from typing import Tuple
 
 import torch
@@ -6,6 +7,7 @@ from dataclasses import dataclass, fields
 from typing import Optional
 from typing import Type, TypeVar, List
 
+from Learner.constants import TOP_K_SAMPLES
 
 T = TypeVar('T', bound='Holders')
 
@@ -668,6 +670,22 @@ class TensorUtils:
 
         return tensor
 
+    @staticmethod
+    def top_k_f_mask(tensor):
+        # Find the top k values along the f dimension
+        top_k_values, _ = torch.topk(tensor, TOP_K_SAMPLES, dim=2, largest=True, sorted=False)
+
+        # Get the minimum of the top k values
+        min_top_k_values = top_k_values.min(dim=2, keepdim=True).values
+
+        # Create a mask where values greater than or equal to the minimum top k value are kept
+        mask = tensor >= min_top_k_values
+
+        # Apply the mask to the original tensor
+        masked_tensor = tensor * mask
+
+        return masked_tensor
+
 
 class LinearSchedule:
     """Linear schedule, for changing constants during agent training."""
@@ -684,3 +702,14 @@ class LinearSchedule:
         """Implements a linear transition from a beginning to an end value."""
         frac = min(max(t_ - self._begin_t, 0), self._decay_steps) / self._decay_steps
         return (1 - frac) * self._begin_value + frac * self._end_value
+
+
+def get_unique_filename(base_name):
+    """Generate a unique filename by adding a number if needed."""
+    if not os.path.exists(base_name):
+        return base_name
+    base, ext = os.path.splitext(base_name)
+    i = 1
+    while os.path.exists(f"{base}_{i}{ext}"):
+        i += 1
+    return f"{base}_{i}{ext}"

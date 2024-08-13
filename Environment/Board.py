@@ -78,8 +78,10 @@ class Board:
         # Fill Faces as tiles
         for i in range(len(TILE_TYPES)):
             face_states[i, TILE_TYPES[i]] = TILE_NUMBERS[i]
-        shuffled_faces = T.randperm(face_states.size(0))
-        face_states = face_states[shuffled_faces]
+
+        # Shuffle Faces
+        # shuffled_faces = T.randperm(face_states.size(0))
+        # face_states = face_states[shuffled_faces]
 
         # Make Faces and assign Nodes
         verts_per_row = [7, 9, 11, 11, 9, 7]

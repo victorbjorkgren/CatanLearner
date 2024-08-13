@@ -69,13 +69,44 @@ sparse_type_mapping = bidict({
     3: RoadAction,
 })
 
-import torch
-from dataclasses import dataclass
-from torch import Tensor
 
 @dataclass
 class FlatPi(Holders):
     index: Tensor
+
+    def unstack_parts(self):
+        # Assuming that the tensor dimensions match the expected ones from stack_parts
+        # Extract dimensions
+        b, t, total_actions, _ = self.index.shape
+
+        # Calculate the specific sizes
+        settle_size = N_NODES
+        road_size = N_ROADS * 2
+        trade_size = N_RESOURCES ** 2
+        noop_size = 1
+
+        settle_i = settle_size
+        road_i = settle_size + road_size
+        trade_i = settle_size + road_size + trade_size
+        noop_i = settle_size + road_size + trade_size + noop_size
+
+        # Split the stacked tensor based on these sizes
+        settle = self.index[:, :, :settle_i, :]
+        road = self.index[:, :, settle_i:road_i, :]
+        flat_cross_probs = self.index[:, :, road_i:trade_i, :]
+        noop = self.index[:, :, trade_i:noop_i, :]
+
+        # Reshape the flat_cross_probs back to the original trade dimensions
+        flat_cross_probs = flat_cross_probs.view(b, t, N_RESOURCES, N_RESOURCES, 1)
+
+        # Split the flattened cross-probabilities back into 'give' and 'get'
+        trade_give = flat_cross_probs.sum(dim=-2).squeeze(-1)
+        trade_get = flat_cross_probs.sum(dim=-3).squeeze(-1)
+
+        # Reconstruct trade
+        trade = torch.stack([trade_give, trade_get], dim=-1)
+
+        return settle, road, trade, noop
 
     @staticmethod
     def i_to_action(sample):

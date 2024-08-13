@@ -286,8 +286,9 @@ class PPOTrainer(Trainer):
 
         net_output = self.net(sample['transition'].as_net_input)
         # Mask, choose correct player and renormalize
-        pi = net_output.pi.index * masks.index
-        pi = torch.gather(pi, -1, i_am_player[:,:,None,None].expand(-1,-1,224,-1)).squeeze(-1)
+        pi = torch.gather(net_output.pi.index, -1, i_am_player[:,:,None,None].expand(-1,-1,224,-1)).squeeze(-1)
+        pi = pi * masks.index.squeeze(-1)
+        pi = TensorUtils.top_k_f_mask(pi)
         pi = pi / pi.sum(-1, keepdims=True).clamp_min(1e-9)
         pi = FlatPi(pi.unsqueeze(-1))
 

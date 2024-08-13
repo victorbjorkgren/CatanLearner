@@ -1,5 +1,5 @@
 import os
-import threading
+import multiprocessing
 from abc import abstractmethod
 from collections import namedtuple
 from datetime import datetime
@@ -21,7 +21,7 @@ from Learner.Utility.Utils import TensorUtils, Holders
 from Learner.Layers import MLP, PowerfulLayer, MultiHeadAttention
 from Learner.constants import DENSE_FORWARD
 
-file_lock = threading.Lock()
+file_lock = multiprocessing.Lock()
 
 
 def synchronized_state(func):
