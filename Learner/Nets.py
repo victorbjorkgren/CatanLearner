@@ -1,5 +1,4 @@
 import os
-import multiprocessing
 from abc import abstractmethod
 from collections import namedtuple
 from datetime import datetime
@@ -10,62 +9,64 @@ import torch as T
 import torch.nn as nn
 import torch_geometric as pyg
 from torch import Tensor
-from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
-from torch_geometric.nn import GATv2Conv, GINEConv
+from torch_geometric.nn import GATv2Conv
 
-from Environment import Game
 from Environment.constants import N_RESOURCES, N_GRAPH_NODES, N_NODES, N_ROADS
-from Learner.Utility.ActionTypes import TradeAction, Pi, sparse_type_mapping, SparsePi, FlatPi
+from Learner.Layers import MLP, PowerfulLayer, MultiHeadAttention
+from Learner.Utility.ActionTypes import TradeAction, sparse_type_mapping, SparsePi, FlatPi
 from Learner.Utility.DataTypes import PPOTransition, NetInput, GameState, NetOutput
 from Learner.Utility.Utils import TensorUtils, Holders
-from Learner.Layers import MLP, PowerfulLayer, MultiHeadAttention
 from Learner.constants import DENSE_FORWARD
 
-file_lock = multiprocessing.Lock()
+
+# file_lock = multiprocessing.Lock()
 
 
-def synchronized_state(func):
-    def state_wrapper(*args, **kwargs):
-        with file_lock:
-            return func(*args, **kwargs)
-    return state_wrapper
+# def synchronized_state(func):
+#     def state_wrapper(*args, **kwargs):
+#         with file_lock:
+#             return func(*args, **kwargs)
+#     return state_wrapper
 
 
 class BaseNet(nn.Module):
-    def __init__(self, name):
+    def __init__(self, name, lock):
         super().__init__()
         self.name = name
+        self.lock = lock
 
     def clone_state(self, other):
         self.load_state_dict(other.state_dict(), strict=False)
 
-    @synchronized_state
+    # @synchronized_state
     def save(self, suffix):
-        if suffix == 'latest':
-            torch.save(self.state_dict(), f'./{self.name}_Agent_Titan.pth')
-        else:
-            os.makedirs('./PastTitans/', exist_ok=True)
-            torch.save(self.state_dict(), f'./PastTitans/{self.name}_Agent_{suffix}.pth')
+        with self.lock:
+            if suffix == 'latest':
+                torch.save(self.state_dict(), f'./{self.name}_Agent_Titan.pth')
+            else:
+                os.makedirs('./PastTitans/', exist_ok=True)
+                torch.save(self.state_dict(), f'./PastTitans/{self.name}_Agent_{suffix}.pth')
 
-            # Create BackUp
-            now = datetime.now()
-            now = now.strftime("%Y%m%d_%H%M%S")
-            os.makedirs('./NetBackup/', exist_ok=True)
-            torch.save(self.state_dict(), f'./NetBackup/{self.name}_state_{now}.pth')
+                # Create BackUp
+                now = datetime.now()
+                now = now.strftime("%Y%m%d_%H%M%S")
+                os.makedirs('./NetBackup/', exist_ok=True)
+                torch.save(self.state_dict(), f'./NetBackup/{self.name}_state_{now}.pth')
 
-    @synchronized_state
+    # @synchronized_state
     def load(self, file: str | int):
-        if file == 'latest':
-            dir = './'
-            file = f'{self.name}_Agent_Titan.pth'
-        else:
-            dir = './PastTitans'
-        path = os.path.join(dir, file)
-        try:
-            self.load_state_dict(torch.load(path), strict=False)
-        except FileNotFoundError:
-            print(f'Could not find {file} - saving with fresh weights')
-            torch.save(self.state_dict(), path)
+        with self.lock:
+            if file == 'latest':
+                dir = './'
+                file = f'{self.name}_Agent_Titan.pth'
+            else:
+                dir = './PastTitans'
+            path = os.path.join(dir, file)
+            try:
+                self.load_state_dict(torch.load(path), strict=False)
+            except FileNotFoundError:
+                print(f'Could not find {file} - saving with fresh weights')
+                torch.save(self.state_dict(), path)
 
 
 

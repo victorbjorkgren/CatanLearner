@@ -74,6 +74,11 @@ sparse_type_mapping = bidict({
 class FlatPi(Holders):
     index: Tensor
 
+    def get_noop_p(self) -> Tensor:
+        noop_i = self.action_to_i(NoopAction)
+        noop_p = self.index[:, :, noop_i, :]
+        return noop_p
+
     def unstack_parts(self):
         # Assuming that the tensor dimensions match the expected ones from stack_parts
         # Extract dimensions

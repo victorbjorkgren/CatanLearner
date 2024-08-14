@@ -2,50 +2,63 @@ import multiprocessing
 import torch
 import time
 
-# Define the size of the tensors and the number of transfers
-tensor_size = (1000, 1000)
-num_tensors = 10
 
-# Function to create and push tensors to shared list
+def dummy_function():
+    pass
+
+# Function to create processes and immediately join them (no operation)
+def measure_process_setup_overhead():
+
+
+    start_time = time.time()
+
+    process1 = multiprocessing.Process(target=dummy_function)
+    process2 = multiprocessing.Process(target=dummy_function)
+
+    process1.start()
+    process2.start()
+
+    process1.join()
+    process2.join()
+
+    end_time = time.time()
+
+    return end_time - start_time
+
+
+# Original functions for comparison
 def writer_list(shared_list, num_tensors):
     for i in range(num_tensors):
-        tensor = torch.randn(tensor_size)
+        tensor = torch.randn((10, 10))
         shared_list.append(tensor)
 
-# Function to read tensors from shared list
+
 def reader_list(shared_list, num_tensors):
     for i in range(num_tensors):
-        if shared_list:  # Ensure list is not empty before popping
+        if shared_list:
             tensor = shared_list.pop(0)
-            # Perform some operation to ensure tensor is accessed
             _ = tensor.sum()
 
-# Function to create and push tensors to queue
+
 def writer_queue(queue, num_tensors):
     for i in range(num_tensors):
-        tensor = torch.randn(tensor_size)
+        tensor = torch.randn((10, 10))
         queue.put(tensor)
 
-# Function to read tensors from queue
+
 def reader_queue(queue, num_tensors):
     for i in range(num_tensors):
         tensor = queue.get()
-        # Perform some operation to ensure tensor is accessed
         _ = tensor.sum()
 
-# Function for single-threaded tensor creation and processing
-def single_threaded_test(num_tensors):
-    for i in range(num_tensors):
-        tensor = torch.randn(tensor_size)
-        # Perform some operation to ensure tensor is accessed
-        _ = tensor.sum()
 
-def test_shared_list():
+# Test functions
+def t_shared_list():
     manager = multiprocessing.Manager()
     shared_list = manager.list()
 
-    writer_process = multiprocessing.Process(target=writer_list, args=(shared_list, num_tensors))
-    reader_process = multiprocessing.Process(target=reader_list, args=(shared_list, num_tensors))
+    writer_process = multiprocessing.Process(target=writer_list, args=(shared_list, 10))
+    reader_process = multiprocessing.Process(target=reader_list, args=(shared_list, 10))
 
     start_time = time.time()
     writer_process.start()
@@ -57,11 +70,12 @@ def test_shared_list():
 
     return end_time - start_time
 
-def test_queue():
+
+def t_queue():
     queue = multiprocessing.Queue()
 
-    writer_process = multiprocessing.Process(target=writer_queue, args=(queue, num_tensors))
-    reader_process = multiprocessing.Process(target=reader_queue, args=(queue, num_tensors))
+    writer_process = multiprocessing.Process(target=writer_queue, args=(queue, 10))
+    reader_process = multiprocessing.Process(target=reader_queue, args=(queue, 10))
 
     start_time = time.time()
     writer_process.start()
@@ -73,18 +87,16 @@ def test_queue():
 
     return end_time - start_time
 
-def test_single_threaded():
-    start_time = time.time()
-    single_threaded_test(num_tensors)
-    end_time = time.time()
-
-    return end_time - start_time
 
 if __name__ == '__main__':
-    list_time = test_shared_list()
-    queue_time = test_queue()
-    single_threaded_time = test_single_threaded()
+    setup_overhead = measure_process_setup_overhead()
+    print(f"Process setup overhead: {setup_overhead:.4f} seconds")
 
-    print(f"Time taken using shared list: {list_time:.4f} seconds")
-    print(f"Time taken using queue: {queue_time:.4f} seconds")
-    print(f"Time taken using single-threaded approach: {single_threaded_time:.4f} seconds")
+    list_time = t_shared_list()
+    queue_time = t_queue()
+
+    adjusted_list_time = list_time - setup_overhead
+    adjusted_queue_time = queue_time - setup_overhead
+
+    print(f"Time taken using shared list (adjusted): {adjusted_list_time:.4f} seconds")
+    print(f"Time taken using queue (adjusted): {adjusted_queue_time:.4f} seconds")

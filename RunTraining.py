@@ -21,7 +21,7 @@ autograd.set_detect_anomaly(True)
 
 # td_loss_hist = deque(maxlen=HISTORY_DISPLAY)
 
-def learner_loop(stop_event, tensorboard_queue, print_queue, buffer):
+def learner_loop(stop_event, tensorboard_queue, print_queue, buffer, file_lock):
     writer = SummaryWriter()
 
     def write_stats(stats: Dict, step: int):
@@ -58,8 +58,7 @@ def learner_loop(stop_event, tensorboard_queue, print_queue, buffer):
         # Write data to the actor process
         print_queue.put({
             'td_loss': td_loss,
-            'tick_iter': trainer.tick_iter,
-            'l_buffer': buffer.mem_size
+            'tick_iter': trainer.tick_iter
         })
 
         # Write data from learner process
@@ -76,7 +75,7 @@ def learner_loop(stop_event, tensorboard_queue, print_queue, buffer):
                 break
 
 
-def actor_loop(stop_event, tensorboard_queue, print_queue, buffer):
+def actor_loop(stop_event, tensorboard_queue, print_queue, buffer, file_lock):
     game = Game(
         n_players=N_PLAYERS,
         max_turns=MAX_TURNS
@@ -171,16 +170,16 @@ def graceful_shutdown():
     if actor_thread.is_alive():
         actor_thread.join()
 
-    buffer.close()
-    buffer.unlink()
+
+
 
     tensorboard_queue.close()
     print_queue.close()
 
 
-def learner_worker(stop_event, tensorboard_queue, print_queue, buffer):
+def learner_worker(stop_event, tensorboard_queue, print_queue, buffer, file_lock):
     try:
-        learner_loop(stop_event, tensorboard_queue, print_queue, buffer)
+        learner_loop(stop_event, tensorboard_queue, print_queue, buffer, file_lock)
     except Exception as e:
         stack_trace = traceback.format_exc()
         print(f"EXCEPTION STACK TRACE:{stack_trace}")
@@ -189,9 +188,9 @@ def learner_worker(stop_event, tensorboard_queue, print_queue, buffer):
         stop_event.set()
 
 
-def actor_worker(stop_event, tensorboard_queue, print_queue, buffer):
+def actor_worker(stop_event, tensorboard_queue, print_queue, buffer, file_lock):
     try:
-        actor_loop(stop_event, tensorboard_queue, print_queue, buffer)
+        actor_loop(stop_event, tensorboard_queue, print_queue, buffer, file_lock)
     except Exception as e:
         stack_trace = traceback.format_exc()
         print(f"EXCEPTION STACK TRACE:{stack_trace}")
@@ -204,6 +203,7 @@ if __name__ == '__main__':
     stop_event = multiprocessing.Event()
     tensorboard_queue = multiprocessing.Queue()
     print_queue = multiprocessing.Queue()
+    file_lock = multiprocessing.Lock()
 
     buffer = InMemBuffer(
         alpha=REPLAY_ALPHA,
@@ -212,7 +212,7 @@ if __name__ == '__main__':
         max_seq_len=MAX_SEQUENCE_LENGTH,
     )
 
-    args = (stop_event, tensorboard_queue, print_queue, buffer)
+    args = (stop_event, tensorboard_queue, print_queue, buffer, file_lock)
 
     try:
         learner_thread = multiprocessing.Process(target=learner_worker, args=args)
@@ -223,9 +223,6 @@ if __name__ == '__main__':
 
         learner_thread.join()
         actor_thread.join()
-
-        buffer.close()
-        buffer.unlink()
 
         tensorboard_queue.close()
         print_queue.close()

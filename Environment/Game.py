@@ -537,6 +537,12 @@ class Game:
     def render_side_by_side(self, flat_pi: FlatPi, render_type: str):
         assert render_type in ['training', 'testing', 'init']
 
+        # Don't render un-interesting frames
+        noop_p = flat_pi.get_noop_p()
+        noop_p = noop_p.squeeze().item()
+        if noop_p > 0.999999:
+            return
+
         turn_appendix = int((self.turn - int(self.turn)) * self.n_players)
 
         if render_type == 'training':
