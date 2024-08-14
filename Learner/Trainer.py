@@ -290,6 +290,7 @@ class PPOTrainer(Trainer):
         pi = pi * masks.index.squeeze(-1)
         pi = TensorUtils.top_k_f_mask(pi)
         pi = pi / pi.sum(-1, keepdims=True).clamp_min(1e-9)
+        forced_action_mask = pi.max(-1)[0] > .99999
         pi = FlatPi(pi.unsqueeze(-1))
 
         # self.apply_masks(net_output, masks)
@@ -314,6 +315,10 @@ class PPOTrainer(Trainer):
         policy_loss = policy_loss * ~out_of_seq_mask
         entropy_loss = entropy_loss * ~out_of_seq_mask
         value_loss = value_loss * ~out_of_seq_mask
+        # Set loss where action is forced to zero
+        policy_loss = policy_loss * ~forced_action_mask
+        entropy_loss = entropy_loss * ~forced_action_mask
+        value_loss = value_loss * ~forced_action_mask
 
         policy_loss = torch.mean(policy_loss)
         entropy_loss = torch.mean(entropy_loss)
@@ -334,6 +339,7 @@ class PPOTrainer(Trainer):
         self.optimizer.step()
 
         return loss.item(), stats
+
 
 class SACTrainer(Trainer):
     def __init__(self,

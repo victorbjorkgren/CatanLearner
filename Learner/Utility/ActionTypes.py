@@ -75,7 +75,7 @@ class FlatPi(Holders):
     index: Tensor
 
     def get_noop_p(self) -> Tensor:
-        noop_i = self.action_to_i(NoopAction)
+        noop_i = self.action_to_i(NoopAction())
         noop_p = self.index[:, :, noop_i, :]
         return noop_p
 
@@ -141,7 +141,7 @@ class FlatPi(Holders):
             sample = (N_NODES + N_ROADS * 2) + give * N_RESOURCES + get
             return sample
         elif isinstance(action, NoopAction):
-            return (N_NODES + N_ROADS * 2 + N_RESOURCES ** 2) + 1
+            return (N_NODES + N_ROADS * 2 + N_RESOURCES ** 2)
         else:
             raise ValueError("Unknown action type")
 

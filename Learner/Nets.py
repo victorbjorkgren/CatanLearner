@@ -79,7 +79,7 @@ class CoreNet(BaseNet):
                  net_config: dict,
                  batch_size=1,
                  undirected_faces=True, ) -> None:
-        super().__init__('Core')
+        super().__init__('Core', net_config['lock'])
         game = net_config['game']
         n_embed = net_config['n_embed']
         n_output = net_config['n_output']
@@ -496,7 +496,7 @@ class GameNet(BaseNet):
                  batch_size=1,
                  undirected_faces=True,
                  ):
-        super().__init__(name)
+        super().__init__(name, net_config['lock'])
         self.config = net_config
         self.name = name
         self.batch_size = batch_size

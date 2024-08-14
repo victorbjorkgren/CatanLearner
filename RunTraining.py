@@ -39,7 +39,8 @@ def learner_loop(stop_event, tensorboard_queue, print_queue, buffer, file_lock):
         'n_embed': N_HIDDEN_NODES,
         'n_output': N_PLAYERS,
         'on_device': LEARNER_DEVICE,
-        'load_state': LOAD_Q_NET
+        'load_state': LOAD_Q_NET,
+        'lock': file_lock,
     }
     learner_net = PPONet(learner_net_init, batch_size=BATCH_SIZE)
     trainer = PPOTrainer(
@@ -87,7 +88,8 @@ def actor_loop(stop_event, tensorboard_queue, print_queue, buffer, file_lock):
         'n_embed': N_HIDDEN_NODES,
         'n_output': N_PLAYERS,
         'on_device': ACTOR_DEVICE,
-        'load_state': False
+        'load_state': False,
+        'lock': file_lock,
     }
 
     actor_net_list = [PPONet(actor_net_init, batch_size=BATCH_SIZE) for _ in range(N_PLAYERS)]
