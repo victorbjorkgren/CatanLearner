@@ -1,6 +1,11 @@
+.idea/
+
 /Renders/
 /ReplayBuffer/
 /NetBackup/
 /runs/
-Renders/
-.idea/
+*/Renders/
+/PastTitans/
+
+*.pkl
+*.pth
