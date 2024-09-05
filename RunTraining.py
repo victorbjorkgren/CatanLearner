@@ -32,7 +32,8 @@ def get_git_commit_hash():
 # td_loss_hist = deque(maxlen=HISTORY_DISPLAY)
 
 def learner_loop(stop_event, tensorboard_queue, print_queue, buffer, file_lock):
-    writer = SummaryWriter(log_dir='./runs/' + datetime.now().strftime('%b%d-%y--%H-%M-%S-') + EXPERIMENT_NAME)
+    date_str = datetime.now().strftime('%b%d-%y--%H-%M-%S-')
+    writer = SummaryWriter(log_dir='./runs/' + date_str + EXPERIMENT_NAME + '-' + get_git_commit_hash())
 
     def write_stats(stats: Dict, step: int):
         for key, value in stats.items():
