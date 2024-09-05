@@ -1,0 +1,54 @@
+@import '../../styles/variables.module.css';
+
+.pickCoordsToolContainer {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    position: relative;
+    margin: 0 auto;
+    font-family: 'Plus Jakarta Sans', sans-serif;
+    font-size: var(--font-size-large);
+}
+
+.previewContainer {
+    position: relative;
+    height: 50vh;
+    width: auto;
+    margin: min(20px, 50vh);
+}
+
+.message {
+    margin: 1.5vh;
+    font-size: var(--font-size-medium);
+}
+
+.previewImage {
+    cursor: crosshair;
+    max-width: 100%;
+    height: 100%;
+}
+
+.previewDot {
+    position: absolute;
+    background-color: var(--accent-color);
+    height: 5px;
+    width: 5px;
+    transform: translate(-50%, -50%);
+    z-index: 9;
+    pointer-events: none;
+}
+
+.switchButtons {
+    display: flex;
+}
+
+.markPoint {
+    position: absolute;
+    width: 5px;
+    height: 5px;
+    background-color: var(--accent-color);
+    border-radius: 50%;
+    transform: translate(-50%, -50%);
+    pointer-events: none;
+}

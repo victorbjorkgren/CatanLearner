@@ -1,0 +1,69 @@
+@import '../../styles/variables.module.css';
+
+.mainBackground {
+    /*height: 100vh;*/
+    /*background-color: var(--primary-color);*/
+    justify-content: center;
+    display: flex;
+    flex-direction: column;
+    flex-wrap: wrap;
+    align-content: center;
+    text-align: center;
+
+}
+
+.mainTitle {
+    margin: 2vw;
+    font-family: 'Plus Jakarta Sans', sans-serif;
+    font-weight: var(--font-weight-bold);
+    font-size: var(--font-size-large);
+    letter-spacing: 10px;
+    color: var(--text-color);
+}
+
+.mainTitle::after {
+    content: "";
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: -5px; /* Adjust this value to control the distance of the line from the text */
+    height: 2px; /* Adjust this value to control the thickness of the line */
+    background-color: black; /* Set the color of the line */
+    width: 120%; /* Adjust this value to control the length of the line relative to the text */
+    margin-left: -10%; /* Centers the line under the text */
+}
+
+.mainScreen {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    font-family: 'Plus Jakarta Sans', sans-serif;
+    font-weight: var(--font-weight-regular);
+}
+
+.mainFrame {
+    margin: 1vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    height: 100%;
+    transition: filter 0.3s ease;
+    padding-top: 10vh;
+}
+
+.blur {
+  filter: blur(5px);
+}
+
+.popup {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  padding: 20px;
+  box-shadow: 0px 0px 10px rgba(0, 0, 0, 0.1);
+  z-index: 100;
+}
+

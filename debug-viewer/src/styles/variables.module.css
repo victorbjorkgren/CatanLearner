@@ -1,0 +1,25 @@
+:root {
+    --primary-color: #ffffff;
+    --secondary-color: #404040;
+    --accent-color: #e4342d;
+    --text-color: #000050;
+
+    --font-size-small: 0.8rem;
+    --font-size-medium: 1.2rem;
+    --font-size-large: 2.3rem;
+
+    --font-weight-regular: 300;
+    --font-weight-bold: 800;
+
+
+    --primary-color-shadow: #d3d3d3;
+    /*--secondary-color-shadow: #ededed;*/
+    --secondary-color-shadow: #d9d9d9;
+    --main-shadow: 11px -11px 22px var(--primary-color-shadow),
+             -11px 11px 22px var(--secondary-color-shadow);
+    --hover-shadow: 11px -11px 12px var(--primary-color-shadow),
+                   -11px 11px 12px var(--secondary-color-shadow);
+    --click-shadow: inset 5px -5px 8px var(--primary-color-shadow),
+                    inset -5px 5px 8px var(--secondary-color-shadow);
+
+}

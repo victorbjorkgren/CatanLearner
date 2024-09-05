@@ -1,0 +1,83 @@
+/* FramePickerTool.module.css */
+.cropToolContainer {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    position: relative;
+    margin: 0 auto;
+}
+
+.message {
+    margin: 5vh;
+    font-size: var(--font-size-medium);
+}
+
+.referencePreviewContainer {
+    height: 75vh;
+    width: auto;
+    justify-content: center;
+    align-items: center;
+    margin: min(10px, 10vh);
+}
+
+.referencePreviewImage {
+    height: 100%;
+    width: 100%;
+}
+
+.thumbnailLineContainer {
+    display: flex;
+    width: 90vw;
+    height: 10vh;
+}
+
+.thumbnailLine {
+    display: flex;
+    align-items: center;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+}
+
+.thumbnailContainer {
+    margin: 0px;
+    height: 100%;
+    overflow: hidden;
+    display: flex;
+    justify-content: center;
+    object-fit: cover;
+    object-position: center;
+}
+
+.thumbnail {
+    display: block;
+    margin-left: auto; /* Centers the image horizontally */
+    margin-right: auto; /* Centers the image horizontally */
+    height: 100%;
+    object-fit: cover;
+    object-position: center;
+}
+
+.markerLine {
+    position: relative;
+    top: 0;
+    height: 100%;
+    width: 2px;
+    background-color: var(--accent-color);
+    pointer-events: none;
+    transform: translateX(-50%);
+    z-index: 100;
+}
+
+.frameSelector {
+    position: absolute;
+    top: 0;
+    left: 0;
+    height: 100%;
+    width: 100%;
+    border: 2px solid orange;
+    /*box-sizing: border-box;*/
+    /*cursor: grab;*/
+}
+

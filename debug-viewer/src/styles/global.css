@@ -1,0 +1,8 @@
+@import './variables.module.css';
+
+@font-face {
+    font-family: 'Plus Jakarta Sans';
+    src: url('./PlusJakartaSans-VariableFont_wght.ttf') format('truetype');
+    font-weight: 100 900;
+    font-style: normal;
+}

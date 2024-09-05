@@ -1,0 +1,88 @@
+{
+  "name": "frontend",
+  "description": "Markerless Gait Analysis App - Built by Piktiv 2024",
+  "author": {
+    "name": "Piktiv: Victor Björkgren and Martin Karlsson"
+  },
+  "version": "0.1.0",
+  "private": true,
+  "main": "public/electron.js",
+  "homepage": "./",
+  "dependencies": {
+    "@testing-library/jest-dom": "^5.17.0",
+    "@testing-library/react": "^13.4.0",
+    "@testing-library/user-event": "^13.5.0",
+    "cross-env": "^7.0.3",
+    "electron-is-dev": "^3.0.1",
+    "find-process": "^1.4.7",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-scripts": "5.0.1",
+    "web-vitals": "^2.1.4"
+  },
+  "scripts": {
+    "start": "cross-env BROWSER=none react-scripts start",
+    "build-react": "react-scripts build",
+    "build-python": "mkdir -p server_build && cd server_build && pyinstaller --onedir --noupx --exclude-module matplotlib --exclude-module matlab --exclude-module tensorboard ../../python_src/socket_server.py && cd ..",
+    "build-electron": "electron-builder",
+    "build": "yarn build-react && yarn build-python && cross-env NODE_ENV='production' yarn build-electron",
+    "electron-dev": "concurrently \"cross-env NODE_ENV='development' yarn start\" \"wait-on http://localhost:3000 && electron .\""
+  },
+  "eslintConfig": {
+    "extends": [
+      "react-app",
+      "react-app/jest"
+    ]
+  },
+  "browserslist": {
+    "production": [
+      ">0.2%",
+      "not dead",
+      "not op_mini all"
+    ],
+    "development": [
+      "last 1 chrome version",
+      "last 1 firefox version",
+      "last 1 safari version"
+    ]
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
+    "concurrently": "^8.2.2",
+    "electron": "^31.0.1",
+    "electron-builder": "^24.13.3",
+    "typescript": "^5.5.4",
+    "wait-on": "^7.2.0"
+  },
+  "build": {
+    "appId": "com.piktiv.markerlessgaitanalysis",
+    "productName": "Markerless Gait Analysis",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "build/**/*",
+      "node_modules/**/*",
+      "server_build/dist/socket_server/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "server_build/dist/socket_server/",
+        "to": "python/",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
+    "win": {
+      "target": "nsis"
+    },
+    "mac": {
+      "target": "dmg"
+    },
+    "linux": {
+      "target": "AppImage"
+    }
+  }
+}
