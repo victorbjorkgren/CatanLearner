@@ -31,6 +31,7 @@ class Game:
         self.max_turns = max_turns
         self.episode = start_episode
 
+        self.last_action_str = ""
         self.player_agents: Optional[List[BaseAgent]] = None
         self.first_turn_village_switch: Optional[bool] = None
         self.first_turn: Optional[bool] = None
@@ -85,6 +86,8 @@ class Game:
         return GameState(node_x[None, None, ...], edge_x[None, None, ...], face_x[None, None, ...], game_x[None, None, ...])
 
     def reset(self):
+        self.last_action_str = ""
+        self.dice_roll = ""
         self.turn = 0
         self.idle_turns = 0
         self.episode += 1
@@ -118,6 +121,7 @@ class Game:
 
     def step(self, action: BaseAction, render: bool = False) -> tuple[float, bool, bool]:
         """Take one action step in the game. Returns reward, done, and the actual action."""
+        self.dice_roll = ""
         succeeded = True
         reward = 0.
         if self.first_turn:
@@ -128,17 +132,22 @@ class Game:
                 return self.failed_action_penalty + reward, False, True
 
         if isinstance(action, RoadAction):
+            self.last_action_str = "Build Road"
             if not self.build_road(action.index.item(), self.current_player):
                 succeeded = False
         elif isinstance(action, SettlementAction):
+            self.last_action_str = 'Build Settlement'
             if not self.build_village(action.index, self.current_player):
                 succeeded = False
             else:
                 reward += 1
         elif isinstance(action, TradeAction):
+            resources = ['brick', 'grain', 'ore', 'lumber', 'wool']
+            self.last_action_str=f"Traded {resources[action.give]} for {resources[action.get]}"
             succeeded = self.players[self.current_player].trade(give_ind=action.give, get_ind=action.get)
 
         if isinstance(action, NoopAction):
+            self.last_action_str = "No op!"
             self.idle_turns += 1
             self.current_player = (self.current_player + 1) % self.n_players
             self.turn += 1 / self.n_players
@@ -231,6 +240,7 @@ class Game:
 
     def resource_step(self):
         dice = random.randint(1, 6) + random.randint(1, 6)
+        self.dice_roll = f"Dice Roll: {dice:d}"
 
         # Rob if 7
         if dice == 7:
@@ -387,7 +397,7 @@ class Game:
         ###
         # Player state texts
         ###
-        text_top_left = f"Turn {int(self.turn + 1)} - {int(turn_appendix + 1)}"
+        text_top_left = f"Turn {int(self.turn + 1)} - {int(turn_appendix + 1)}\n{self.dice_roll}"
 
         # Margins from the edges of the figure
         margin_x = 0.02  # X margin as a fraction of total width
@@ -395,6 +405,7 @@ class Game:
 
         # Calculate positions based on figure dimensions and margins
         top_left_pos = (margin_x * FIG_X, (1 - margin_y) * FIG_Y)
+        bottom_right_pos = ((1 - margin_x) * FIG_X, margin_y * FIG_Y)
 
         # Adding custom text
         texts = [f"Player {i_}:\n" + str(self.players[i_]) for i_ in range(self.n_players)]
@@ -408,6 +419,7 @@ class Game:
             y_pos -= (w + margin_y)
 
         plt.text(top_left_pos[0], top_left_pos[1], text_top_left, ha='left', va='top')
+        plt.text(bottom_right_pos[0], bottom_right_pos[1], self.last_action_str, ha='left', va='top')
 
         ###
         # Draw
@@ -537,11 +549,11 @@ class Game:
     def render_side_by_side(self, flat_pi: FlatPi, render_type: str):
         assert render_type in ['training', 'testing', 'init']
 
-        # Don't render un-interesting frames
-        noop_p = flat_pi.get_noop_p()
-        noop_p = noop_p.squeeze().item()
-        if noop_p > 0.999999:
-            return
+        ### Don't render un-interesting frames
+        # noop_p = flat_pi.get_noop_p()
+        # noop_p = noop_p.squeeze().item()
+        # if noop_p > 0.999999:
+        #     return
 
         turn_appendix = int((self.turn - int(self.turn)) * self.n_players)
 
