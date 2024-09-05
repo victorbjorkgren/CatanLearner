@@ -132,12 +132,14 @@ class Game:
                 return self.failed_action_penalty + reward, False, True
 
         if isinstance(action, RoadAction):
-            self.last_action_str = "Build Road"
+            self.last_action_str = "Built Road"
             if not self.build_road(action.index.item(), self.current_player):
+                self.last_action_str = "Failed Building Road"
                 succeeded = False
         elif isinstance(action, SettlementAction):
             self.last_action_str = 'Build Settlement'
             if not self.build_village(action.index, self.current_player):
+                self.last_action_str = "Failed Building Settlement"
                 succeeded = False
             else:
                 reward += 1
@@ -147,7 +149,7 @@ class Game:
             succeeded = self.players[self.current_player].trade(give_ind=action.give, get_ind=action.get)
 
         if isinstance(action, NoopAction):
-            self.last_action_str = "No op!"
+            self.last_action_str = "No-op"
             self.idle_turns += 1
             self.current_player = (self.current_player + 1) % self.n_players
             self.turn += 1 / self.n_players
@@ -183,13 +185,17 @@ class Game:
         reward = 0.
         if self.first_turn_village_switch:
             if isinstance(action, SettlementAction):
+                self.last_action_str = "Built Settlement"
                 build_succeeded = self.build_village(action.index, self.current_player, first_turn=True)
             else:
+                self.last_action_str = "Failed Building Settlement"
                 build_succeeded = False
         else:
             if isinstance(action, RoadAction):
+                self.last_action_str = "Built Road"
                 build_succeeded = self.build_road(action.index.item(), self.current_player, first_turn=True)
             else:
+                self.last_action_str = "Failed Building Road"
                 build_succeeded = False
         if build_succeeded:
             if self.first_turn_village_switch:
@@ -419,7 +425,7 @@ class Game:
             y_pos -= (w + margin_y)
 
         plt.text(top_left_pos[0], top_left_pos[1], text_top_left, ha='left', va='top')
-        plt.text(bottom_right_pos[0], bottom_right_pos[1], self.last_action_str, ha='left', va='top')
+        plt.text(bottom_right_pos[0], bottom_right_pos[1], self.last_action_str, ha='right', va='top')
 
         ###
         # Draw

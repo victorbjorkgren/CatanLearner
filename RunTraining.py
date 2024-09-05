@@ -2,6 +2,7 @@ import multiprocessing
 import queue
 import traceback
 from collections import deque
+from datetime import datetime
 from typing import Dict
 
 from torch import Tensor, autograd
@@ -18,11 +19,20 @@ from Learner.constants import *
 
 autograd.set_detect_anomaly(True)
 
+import subprocess
+
+def get_git_commit_hash():
+    try:
+        # Running the git command to get the current commit hash
+        commit_hash = subprocess.check_output(['git', 'rev-parse', 'HEAD']).strip().decode('utf-8')
+        return commit_hash
+    except subprocess.CalledProcessError:
+        return "no-git"
 
 # td_loss_hist = deque(maxlen=HISTORY_DISPLAY)
 
 def learner_loop(stop_event, tensorboard_queue, print_queue, buffer, file_lock):
-    writer = SummaryWriter()
+    writer = SummaryWriter(log_dir='./runs/' + datetime.now().strftime('%b%d-%y--%H-%M-%S-') + EXPERIMENT_NAME)
 
     def write_stats(stats: Dict, step: int):
         for key, value in stats.items():
@@ -94,7 +104,7 @@ def actor_loop(stop_event, tensorboard_queue, print_queue, buffer, file_lock):
 
     actor_net_list = [PPONet(actor_net_init, batch_size=BATCH_SIZE) for _ in range(N_PLAYERS)]
 
-    iterator = tqdm(range(MAX_STEPS))
+    iterator = tqdm(total=MAX_STEPS)
     agent_list = [
         PPOAgent(
             net=net,
@@ -117,13 +127,11 @@ def actor_loop(stop_event, tensorboard_queue, print_queue, buffer, file_lock):
     game.reset()
     learner_postfix = {}
 
-    for i in iterator:
-        if stop_event.is_set():
-            return
+    while not stop_event.is_set():
         observation = game.extract_attributes()
         current_player = game.current_player
         action, pi = game.current_agent.sample_action(observation, i_am_player=current_player)
-        if (game.episode % 1000 == 0) or (game.episode in [BATCH_SIZE + 1, 100, 200, 500, 800]):
+        if (game.episode % 1000 == 0) or (game.episode == BATCH_SIZE + 1):
             game.render_side_by_side(pi, 'testing')
         reward, done, succeeded = game.step(action)
         game.player_agents[current_player].update_score(reward)
@@ -132,6 +140,9 @@ def actor_loop(stop_event, tensorboard_queue, print_queue, buffer, file_lock):
 
         # On episode termination
         if done:
+            iterator.update(1)
+            if game.episode >= MAX_STEPS:
+                stop_event.set()
             if game.episode % 10 == 0:
                 game.render(render_type='training')
             agent_tracker.update_elo()
