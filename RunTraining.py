@@ -69,12 +69,12 @@ def learner_loop(stop_event, tensorboard_queue, print_queue, buffer, file_lock):
 
         # Write data to the actor process
         print_queue.put({
-            'td_loss': td_loss,
+            # 'td_loss': td_loss,
             'tick_iter': trainer.tick_iter
         })
 
         # Write data from learner process
-        stats['TD_Loss'] = td_loss
+        # stats['TD_Loss'] = td_loss
         write_stats(stats, trainer.tick_iter)
 
         # Write data from actor process
@@ -105,7 +105,7 @@ def actor_loop(stop_event, tensorboard_queue, print_queue, buffer, file_lock):
 
     actor_net_list = [PPONet(actor_net_init, batch_size=BATCH_SIZE) for _ in range(N_PLAYERS)]
 
-    iterator = tqdm(total=MAX_STEPS)
+    iterator = tqdm(desc= EXPERIMENT_NAME, total=MAX_STEPS)
     agent_list = [
         PPOAgent(
             net=net,
