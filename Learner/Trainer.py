@@ -320,7 +320,7 @@ class PPOTrainer(Trainer):
         entropy_loss = entropy_loss * ~forced_action_mask
         value_loss = value_loss * ~forced_action_mask
 
-        # CLip / Norm ?
+        # CLip Value ?
         value_loss = value_loss.clamp_max(.05)
 
         policy_loss = torch.mean(policy_loss)
@@ -341,6 +341,7 @@ class PPOTrainer(Trainer):
 
         self.optimizer.zero_grad()
         loss.backward()
+        stats['grad_norm'] = torch.nn.utils.clip_grad_norm_(self.net.parameters(), max_norm=.5)
         self.optimizer.step()
 
         return loss.item(), stats
