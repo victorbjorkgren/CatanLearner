@@ -1,5 +1,6 @@
 import multiprocessing
 import queue
+import subprocess
 import traceback
 from collections import deque
 from datetime import datetime
@@ -19,7 +20,6 @@ from Learner.constants import *
 
 autograd.set_detect_anomaly(True)
 
-import subprocess
 
 def get_git_commit_hash():
     try:
@@ -29,11 +29,11 @@ def get_git_commit_hash():
     except subprocess.CalledProcessError:
         return "no-git"
 
-# td_loss_hist = deque(maxlen=HISTORY_DISPLAY)
 
 def learner_loop(stop_event, tensorboard_queue, print_queue, buffer, file_lock):
-    date_str = datetime.now().strftime('%b%d-%y--%H-%M-%S-')
-    writer = SummaryWriter(log_dir='./runs/' + date_str + EXPERIMENT_NAME + '-' + get_git_commit_hash())
+    date_str = datetime.now().strftime('%b%d-%y--%H-%M-%S')
+    exp_dir = date_str + '-' + EXPERIMENT_NAME + '-' + get_git_commit_hash()
+    writer = SummaryWriter(log_dir='./runs/' + exp_dir)
 
     def write_stats(stats: Dict, step: int):
         for key, value in stats.items():

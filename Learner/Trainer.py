@@ -320,6 +320,9 @@ class PPOTrainer(Trainer):
         entropy_loss = entropy_loss * ~forced_action_mask
         value_loss = value_loss * ~forced_action_mask
 
+        # CLip / Norm ?
+        value_loss = value_loss.clamp_max(.05)
+
         policy_loss = torch.mean(policy_loss)
         entropy_loss = torch.mean(entropy_loss)
         value_loss = torch.mean(value_loss)
@@ -328,6 +331,8 @@ class PPOTrainer(Trainer):
         stats['clip_epsilon'] = self.clip_epsilon(self.tick_iter)
         stats['value_loss'] = value_loss.detach().cpu().item()
         stats['entropy_loss'] = -entropy_loss.detach().cpu().item()
+
+
 
         # Combine policy loss, value loss, entropy loss.
         # Negative sign to indicate we want to maximize the policy gradient objective function and entropy to encourage exploration
