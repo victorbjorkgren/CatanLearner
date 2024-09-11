@@ -1,7 +1,7 @@
 ### Value Learning
 _We have seen great increases with better stabiltiy in gradients_
-- Lower grad clip
-- Larger net
+- Lower grad clip _no effect at 0.1_ **try 0.07**
+- Larger net **try 64 hidden nodes**
 
 ### Entropy
 _States with many choices are often good_ **Entropy doesn't do that**
@@ -9,7 +9,7 @@ _States with many choices are often good_ **Entropy doesn't do that**
 
 
 - Raise entropy coefficient 
-- Use entropy in advantage estimation
+- Include entropy in advantage estimation
 
 
 ### Debugging
