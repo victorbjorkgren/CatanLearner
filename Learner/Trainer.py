@@ -341,7 +341,7 @@ class PPOTrainer(Trainer):
 
         self.optimizer.zero_grad()
         loss.backward()
-        stats['grad_norm'] = torch.nn.utils.clip_grad_norm_(self.net.parameters(), max_norm=.1)
+        stats['grad_norm'] = torch.nn.utils.clip_grad_norm_(self.net.parameters(), max_norm=GRAD_CLIP)
         self.optimizer.step()
 
         return loss.item(), stats
